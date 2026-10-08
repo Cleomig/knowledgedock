@@ -59,7 +59,7 @@ flowchart LR
     DOC --> EXT[Extracción de texto<br/>txt / md / pdf-parse]
     EXT --> CH[Chunking<br/>500 caracteres / 50 de solapamiento]
     CH --> EMB[Proveedor de embeddings]
-    EMB --> DB[(PostgreSQL<br/>pgvector, vector(768))]
+    EMB --> DB[("PostgreSQL<br/>pgvector, vector(768)")]
     Q --> EMB
     Q --> DB
     ASK --> EMB
