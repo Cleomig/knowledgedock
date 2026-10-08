@@ -42,8 +42,10 @@ export class GeminiProvider implements AiProvider {
 
   constructor(env: NodeJS.ProcessEnv) {
     this.apiKey = env.GEMINI_API_KEY ?? "";
-    // gemini-2.0-flash y 2.5-flash ya no estan disponibles para usuarios nuevos; 3.8-flash es el actual.
-    this.chatModel = env.GEMINI_CHAT_MODEL ?? "gemini-3.8-flash";
+    // La cuota gratuita es POR MODELO (GenerateRequestsPerDayPerProjectPerModel).
+    // gemini-3.8-flash llegó a su tope de 20 req/día y dejó /api/ask devolviendo
+    // un stream vacío. gemini-3.7-flash es el equivalente con su propio cubo.
+    this.chatModel = env.GEMINI_CHAT_MODEL ?? "gemini-3.7-flash";
     this.embeddingModel = env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
 
     if (!this.apiKey) {

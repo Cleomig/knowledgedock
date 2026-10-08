@@ -194,6 +194,9 @@ export default function Home() {
       setStreamingCitations([]);
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Error en la respuesta');
+      // No dejar colgadas las citas streaming de una respuesta que nunca llegó.
+      setStreamingText('');
+      setStreamingCitations([]);
     } finally {
       setChatLoading(false);
       abortRef.current = null;

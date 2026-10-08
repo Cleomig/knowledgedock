@@ -81,9 +81,20 @@ Alinea cada cita con el texto fuente exacto.`;
         // Si la generación falla, NO emitimos [done]: un cliente que solo
         // mira el final del stream daría por buena una respuesta vacía.
         let failed = false;
+        let emitted = 0;
         try {
           for await (const textPart of stream.textStream) {
+            emitted += textPart.length;
             controller.enqueue(encoder.encode(`data: ${textPart}\n\n`));
+          }
+          // El SDK de AI registra algunos fallos (p. ej. 429 de cuota de Gemini)
+          // sin rechazar el iterable: el stream "termina" limpio y sin texto.
+          // Sin este guard, [done] se emite igual, el cliente pinta las citas
+          // con la respuesta en blanco y jamás se ve el error real.
+          if (emitted === 0) {
+            throw new Error(
+              "El proveedor IA no devolvió texto. Suele ser cuota agotada o un modelo no disponible."
+            );
           }
         } catch (err) {
           failed = true;
