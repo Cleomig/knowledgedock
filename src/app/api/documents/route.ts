@@ -7,7 +7,7 @@ import { sendDocumentEmail } from "@/lib/email";
 // Import estático (no `require`): `require` con alias `@/` no se resuelve en
 // el entorno de tests de Vitest, y estos módulos son baratos (pdf-parse ya se
 // carga de forma perezosa dentro de `extractPdfText`).
-import { chunkText, extractPdfText } from "@/lib/chunking";
+import { chunkText, extractPdfText, ocrPdfText, detectPdfScanStatus, buildDocumentError, type DocumentErrorCode } from "@/lib/chunking";
 import { extractDocxText } from "@/lib/docx";
 import { summarizeDocument } from "@/lib/summarize";
 
@@ -19,6 +19,7 @@ interface DocumentRow {
   created_at: Date | string;
   status: string;
   error: string | null;
+  error_code: string | null;
   summary: string | null;
 }
 
@@ -62,7 +63,7 @@ export async function GET(req: Request) {
     // Transición anti-stuck: cualquier fila con status='processing' y created_at > 5 minutos -> 'failed'
     await execute(
       `UPDATE documents 
-       SET status = 'failed', error = 'Procesamiento agotado'
+       SET status = 'failed', error = 'Procesamiento agotado', error_code = 'PROCESSING_TIMEOUT'
        WHERE owner_id = $1 
        AND status = 'processing' 
        AND created_at < NOW() - INTERVAL '5 minutes'`,
@@ -70,7 +71,7 @@ export async function GET(req: Request) {
     );
 
     const rows = await query<DocumentRow>(
-      `SELECT id, title, mime_type, created_at, status, error, summary
+      `SELECT id, title, mime_type, created_at, status, error, error_code, summary
        FROM documents
        WHERE owner_id = $1
        ORDER BY created_at DESC`,
@@ -138,29 +139,71 @@ export async function POST(req: Request) {
     after(async () => {
       try {
         let text: string;
+        let errorResult: ReturnType<typeof buildDocumentError> | null = null;
         
         // Extracción de texto según tipo
         if (mimeType === "application/pdf") {
           text = await extractPdfText(buffer) ?? "";
+          
+          // Si el PDF no tiene texto, verificar si es escaneado e intentar OCR
+          if (!text || text.trim().length === 0) {
+            const scanInfo = await detectPdfScanStatus(buffer);
+            
+            if (scanInfo.isScanned && scanInfo.pageCount > 0) {
+              // Intentar OCR como fallback
+              try {
+                const ocrText = await ocrPdfText(buffer);
+                text = ocrText ?? "";
+                if (!text || text.trim().length === 0) {
+                  // OCR falló
+                  const errorCode: DocumentErrorCode = "OCR_FAILED";
+                  errorResult = buildDocumentError(errorCode, 
+                    `PDF escaneado (${scanInfo.pageCount} página(s)): OCR no pudo extraer texto`
+                  );
+                }
+              } catch {
+                const errorCode: DocumentErrorCode = "OCR_FAILED";
+                errorResult = buildDocumentError(errorCode, 
+                  `PDF escaneado (${scanInfo.pageCount} página(s)): OCR falló`
+                );
+              }
+              
+              // Si aún no hay error y no hay texto, es PDF_EMPTY
+              if (!errorResult && (!text || text.trim().length === 0)) {
+                const errorCode: DocumentErrorCode = "PDF_EMPTY";
+                errorResult = buildDocumentError(errorCode, "El PDF no contiene texto extraíble");
+              }
+            } else {
+              // No son páginas, es PDF vacío
+              const errorCode: DocumentErrorCode = "PDF_EMPTY";
+              errorResult = buildDocumentError(errorCode, "El PDF no contiene texto extraíble");
+            }
+          }
         } else if (
           mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
           file.name.toLowerCase().endsWith(".docx")
         ) {
           text = await extractDocxText(buffer) ?? "";
+          if (!text || text.trim().length === 0) {
+            errorResult = buildDocumentError("DOCX_EMPTY", "No se pudo extraer texto del documento Word");
+          }
         } else if (mimeType.startsWith("text/")) {
           text = buffer.toString("utf-8");
+          if (!text || text.trim().length === 0) {
+            errorResult = buildDocumentError("TEXT_EMPTY", "El archivo de texto está vacío");
+          }
         } else {
           // No debería llegar aquí por la validación anterior, pero por seguridad
           throw new Error(`Tipo MIME no soportado: ${mimeType}`);
         }
 
-        // Validar que el texto no esté vacío después de la extracción
-        if (!text || text.trim().length === 0) {
+        // Si hubo error de extracción, actualizar y salir
+        if (errorResult) {
           await execute(
-            `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
-            [docId, 'El documento no contiene texto extraíble']
+            `UPDATE documents SET status = 'failed', error = $2, error_code = $3 WHERE id = $1`,
+            [docId, errorResult.userMessage, errorResult.code]
           );
-          await maybeSendEmail(user.id, title, "failed", null, "El documento no contiene texto extraíble");
+          await maybeSendEmail(user.id, title, "failed", null, errorResult.userMessage);
           return;
         }
 
@@ -169,10 +212,10 @@ export async function POST(req: Request) {
 
         if (chunks.length === 0) {
           await execute(
-            `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
-            [docId, 'El documento no produjo chunks']
+            `UPDATE documents SET status = 'failed', error = $2, error_code = $3 WHERE id = $1`,
+            [docId, 'El documento no produjo chunks', 'TEXT_EMPTY']
           );
-          await maybeSendEmail(user.id, title, "failed", null, "El documento no produjo chunks");
+          await maybeSendEmail(user.id, title, "failed", null, 'El documento no produjo chunks');
           return;
         }
 
@@ -180,6 +223,8 @@ export async function POST(req: Request) {
         const provider = getAiProvider();
         const embeddings = await provider.embedBatch(chunks, {
           taskType: "retrieval_document",
+        }).catch(() => {
+          throw new Error("Error al generar embeddings");
         });
 
         // Insertar chunks con embeddings
@@ -199,16 +244,34 @@ export async function POST(req: Request) {
         // Actualizar estado a 'ready'
         const finalSummary = summary.trim() ? summary.trim() : null;
         await execute(
-          `UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1`,
+          `UPDATE documents SET status = 'ready', error = NULL, error_code = NULL, summary = $2 WHERE id = $1`,
           [docId, finalSummary]
         );
         await maybeSendEmail(user.id, title, "ready", finalSummary, null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const errorMessage = msg.length > 500 ? msg.substring(0, 500) : msg;
+        
+        // Determinar código de error según el mensaje
+        let errorCode: DocumentErrorCode = "PROCESSING_TIMEOUT";
+        let userMessage = msg;
+        
+        if (msg.includes("embedding") || msg.includes("Embedding")) {
+          errorCode = "EMBEDDING_FAILED";
+          const errResult = buildDocumentError(errorCode, msg);
+          userMessage = errResult.userMessage;
+        } else if (msg.includes("timeout") || msg.includes("agotado")) {
+          errorCode = "PROCESSING_TIMEOUT";
+          const errResult = buildDocumentError(errorCode, msg);
+          userMessage = errResult.userMessage;
+        } else if (msg.includes("no soportado") || msg.includes("MIME")) {
+          userMessage = "Tipo de archivo no soportado";
+        }
+        
+        const errorMessage = userMessage.length > 500 ? userMessage.substring(0, 500) : userMessage;
+        
         await execute(
-          `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
-          [docId, errorMessage]
+          `UPDATE documents SET status = 'failed', error = $2, error_code = $3 WHERE id = $1`,
+          [docId, errorMessage, errorCode]
         );
         await maybeSendEmail(user.id, title, "failed", null, errorMessage);
       }

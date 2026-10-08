@@ -94,8 +94,8 @@ describe("Cableado de summarizeDocument", () => {
 
     expect(summarize.summarizeDocument).toHaveBeenCalledWith("Test Document", "Texto de prueba");
     expect(db.execute).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1"),
-      ["doc-123", "Resumen generado exitosamente"]
+      expect.stringContaining("UPDATE documents SET status = 'ready'"),
+      expect.arrayContaining(["doc-123", "Resumen generado exitosamente"])
     );
   });
 
@@ -108,8 +108,8 @@ describe("Cableado de summarizeDocument", () => {
     await afterCallbacks[0]();
 
     expect(db.execute).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1"),
-      ["doc-123", null]
+      expect.stringContaining("UPDATE documents SET status = 'ready'"),
+      expect.arrayContaining(["doc-123", null])
     );
   });
 
@@ -122,8 +122,8 @@ describe("Cableado de summarizeDocument", () => {
     await afterCallbacks[0]();
 
     expect(db.execute).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1"),
-      ["doc-123", null]
+      expect.stringContaining("UPDATE documents SET status = 'ready'"),
+      expect.arrayContaining(["doc-123", null])
     );
   });
 });

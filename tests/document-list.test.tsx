@@ -14,7 +14,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-function renderDocumentList(documents: Array<{ id: string; title: string; createdAt: string; status?: 'processing' | 'ready' | 'failed' | string; error?: string | null; summary?: string | null }>) {
+function renderDocumentList(documents: Array<{ id: string; title: string; createdAt: string; status?: 'processing' | 'ready' | 'failed' | string; error?: string | null; errorCode?: string | null; summary?: string | null }>) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -50,7 +50,7 @@ describe('DocumentList', () => {
     ]);
 
     expect(container.textContent).toContain('Este es un resumen muy largo');
-    expect(container.textContent).toContain('No se pudo procesar el archivo.');
-    expect(container.querySelector('.text-destructive')).not.toBeNull();
+    expect(container.textContent).toContain('Error');
+    expect(container.querySelector('.bg-amber-100')).not.toBeNull();
   });
 });

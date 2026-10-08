@@ -198,7 +198,7 @@ describe("Ingesta asíncrona con estados", () => {
       // Verificar que se actualizó el estado a 'failed' con mensaje apropiado
       expect(db.execute).toHaveBeenCalledWith(
         expect.stringContaining("UPDATE documents SET status = 'failed'"),
-        ["doc-123", "El documento no contiene texto extraíble"]
+        ["doc-123", "El archivo de texto está vacío", "TEXT_EMPTY"]
       );
     });
 
@@ -242,7 +242,7 @@ describe("Ingesta asíncrona con estados", () => {
       // Verificar que se actualizó el estado a 'failed' con el error
       expect(db.execute).toHaveBeenCalledWith(
         expect.stringContaining("UPDATE documents SET status = 'failed'"),
-        ["doc-123", "Error de embeddings"]
+        ["doc-123", "Error al generar representaciones del documento", "EMBEDDING_FAILED"]
       );
     });
 

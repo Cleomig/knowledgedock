@@ -21,6 +21,7 @@ interface DocItem {
   createdAt: string;
   status?: 'processing' | 'ready' | 'failed' | string;
   error?: string | null;
+  errorCode?: string | null;
   summary?: string | null;
 }
 
@@ -109,11 +110,23 @@ export default function Home() {
           });
           documentStatusesRef.current.set(document.id, document.status);
         } else if (previousStatus === 'processing' && document.status === 'failed') {
-          const errorMessage =
-            fullError.length > 140 ? `${fullError.slice(0, 137)}...` : fullError;
+          const errorCode = document.errorCode;
+          // Mensaje amigable según tipo de error
+          let toastMsg: string;
+          if (errorCode === 'PDF_SCANNED') {
+            toastMsg = `«${document.title}» → PDF escaneado, necesita OCR`;
+          } else if (errorCode === 'PDF_EMPTY') {
+            toastMsg = `«${document.title}» → PDF sin texto extraíble`;
+          } else if (errorCode === 'PROCESSING_TIMEOUT') {
+            toastMsg = `«${document.title}» → tiempo de procesamiento agotado`;
+          } else {
+            const errorMessage =
+              fullError.length > 140 ? `${fullError.slice(0, 137)}...` : fullError;
+            toastMsg = `«${document.title}» falló: ${errorMessage}`;
+          }
           newToasts.push({
             id: `document-toast-${++toastSequenceRef.current}`,
-            message: `«${document.title}» falló: ${errorMessage}`,
+            message: toastMsg,
             title: `«${document.title}» falló: ${fullError}`,
             tone: 'error',
           });
