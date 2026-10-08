@@ -75,7 +75,7 @@ export default function UploadDropzone({ onUploaded, onError }: UploadDropzonePr
     >
       <input
         type="file"
-        accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+        accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         onChange={handleFileInput}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
         aria-hidden="true"

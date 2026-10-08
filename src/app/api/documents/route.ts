@@ -31,6 +31,8 @@ export async function GET(req: Request) {
   }
 }
 
+export const maxDuration = 60;
+
 /** POST /api/documents — Sube e indexa un documento */
 export async function POST(req: Request) {
   try {
@@ -45,6 +47,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: { code: "MISSING_FILE", message: "Falta el archivo" } }, { status: 400 });
     }
 
+    if (file.size > 4 * 1024 * 1024) {
+      return NextResponse.json({ error: { code: "MAX_FILE_SIZE", message: "Archivo demasiado grande" } }, { status: 413 });
+    }
+
     const mimeType = file.type || "application/octet-stream";
     const buffer = Buffer.from(await file.arrayBuffer());
 
@@ -54,6 +60,13 @@ export async function POST(req: Request) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { extractPdfText } = require("@/lib/chunking");
       text = await extractPdfText(buffer) ?? "";
+    } else if (
+      mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      file.name.toLowerCase().endsWith(".docx")
+    ) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { extractDocxText } = require("@/lib/docx");
+      text = await extractDocxText(buffer) ?? "";
     } else if (mimeType.startsWith("text/")) {
       text = buffer.toString("utf-8");
     } else {
@@ -89,13 +102,15 @@ export async function POST(req: Request) {
     });
 
     // Insertar chunks con embeddings
-    for (let i = 0; i < chunks.length; i++) {
-      await execute(
-        `INSERT INTO chunks (document_id, ord, content, embedding)
-         VALUES ($1, $2, $3, $4)`,
-        [docId, i, chunks[i], JSON.stringify(embeddings[i].vector)]
-      );
-    }
+    const ords = chunks.map((_c: string, i: number) => i);
+    const contents = chunks;
+    const vectors = embeddings.map((e: { vector: number[] }) => JSON.stringify(e.vector));
+
+    await execute(
+      `INSERT INTO chunks (document_id, ord, content, embedding)
+       SELECT $1, * FROM unnest($2::int[], $3::text[], $4::vector[])`,
+      [docId, ords, contents, vectors]
+    );
 
     return NextResponse.json({
       id: docId,

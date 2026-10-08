@@ -232,12 +232,33 @@ export class GeminiProvider implements AiProvider {
     texts: string[],
     options?: EmbeddingOptions
   ): Promise<EmbeddingResult[]> {
-    const { embeddings } = await embedMany({
-      model: this.sdk.embedding(this.embeddingModel),
-      values: texts,
-      providerOptions: this.embeddingProviderOptions(options),
-    });
+    const batchSize = 50;
+    const allEmbeddings: number[][] = [];
 
-    return embeddings.map((v) => ({ vector: v }));
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      let attempt = 0;
+      let success = false;
+
+      while (!success && attempt < 2) {
+        try {
+          const { embeddings } = await embedMany({
+            model: this.sdk.embedding(this.embeddingModel),
+            values: batch,
+            providerOptions: this.embeddingProviderOptions(options),
+          });
+          allEmbeddings.push(...embeddings);
+          success = true;
+        } catch (error) {
+          attempt++;
+          if (attempt >= 2) {
+            const msg = error instanceof Error ? error.message : String(error);
+            throw new Error(`Falló el lote de embeddings (textos ${i} a ${i + batch.length - 1}) tras reintentar: ${msg}`);
+          }
+        }
+      }
+    }
+
+    return allEmbeddings.map((v) => ({ vector: v }));
   }
 }
