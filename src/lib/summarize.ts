@@ -40,6 +40,7 @@ Instrucciones:
     const result = await generateText({
       model: sdk.languageModel(modelId),
       messages: [{ role: "user", content: prompt }],
+      abortSignal: AbortSignal.timeout(20000),
     });
     return result.text ?? "";
   } catch {

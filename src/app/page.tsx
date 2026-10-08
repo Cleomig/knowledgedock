@@ -10,6 +10,7 @@ import ChatMessage from '@/components/ChatMessage';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
+import Toast, { type ToastMessage, type ToastState } from '@/components/Toast';
 import { authClient } from '@/lib/auth-client';
 import { parseStreamEvent, SSEDecoder, type Citation } from '@/lib/chat/sse';
 
@@ -47,6 +48,7 @@ export default function Home() {
   const [documents, setDocuments] = useState<DocItem[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [docsError, setDocsError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastState>([]);
 
   // Chat
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -63,6 +65,8 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const documentStatusesRef = useRef<Map<string, string>>(new Map());
+  const toastSequenceRef = useRef(0);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -88,7 +92,39 @@ export default function Home() {
       const res = await fetch('/api/documents');
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
-      setDocuments((data.documents ?? []) as DocItem[]);
+      const nextDocuments = (data.documents ?? []) as DocItem[];
+      const newToasts: ToastMessage[] = [];
+
+      for (const document of nextDocuments) {
+        const previousStatus = documentStatusesRef.current.get(document.id);
+        const fullError = document.error ?? 'Error desconocido';
+
+        if (previousStatus === 'processing' && document.status === 'ready') {
+          newToasts.push({
+            id: `document-toast-${++toastSequenceRef.current}`,
+            message: `«${document.title}» está listo`,
+            tone: 'success',
+          });
+          documentStatusesRef.current.set(document.id, document.status);
+        } else if (previousStatus === 'processing' && document.status === 'failed') {
+          const errorMessage =
+            fullError.length > 140 ? `${fullError.slice(0, 137)}...` : fullError;
+          newToasts.push({
+            id: `document-toast-${++toastSequenceRef.current}`,
+            message: `«${document.title}» falló: ${errorMessage}`,
+            title: `«${document.title}» falló: ${fullError}`,
+            tone: 'error',
+          });
+          documentStatusesRef.current.set(document.id, document.status);
+        } else {
+          documentStatusesRef.current.set(document.id, document.status ?? '');
+        }
+      }
+
+      if (newToasts.length > 0) {
+        setToasts((previous) => [...previous, ...newToasts].slice(-3));
+      }
+      setDocuments(nextDocuments);
     } catch (err) {
       if (!silent) {
         setDocsError(err instanceof Error ? err.message : 'Error al cargar documentos');
@@ -101,6 +137,10 @@ export default function Home() {
   const fetchDocuments = useCallback(() => loadDocuments(false), [loadDocuments]);
 
   const refreshDocuments = useCallback(() => loadDocuments(true), [loadDocuments]);
+
+  const dismissToast = useCallback((toastId: string) => {
+    setToasts((previous) => previous.filter((toast) => toast.id !== toastId));
+  }, []);
 
   // Load private documents only after the session is resolved.
   // Sin sesión no se limpia el estado aquí: mientras no haya usuario la lista
@@ -429,6 +469,7 @@ export default function Home() {
           </div>
         </section>
       </main>
+      <Toast toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

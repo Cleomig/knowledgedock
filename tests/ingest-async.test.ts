@@ -3,6 +3,7 @@ import { POST, GET } from "@/app/api/documents/route";
 import * as auth from "@/lib/auth-session";
 import * as db from "@/lib/db";
 import * as ai from "@/lib/ai";
+import * as summarize from "@/lib/summarize";
 
 describe("Ingesta asíncrona con estados", () => {
   beforeEach(() => {
@@ -12,6 +13,7 @@ describe("Ingesta asíncrona con estados", () => {
     // respuestas residuales de los anteriores.
     vi.mocked(db.query).mockReset();
     vi.mocked(db.execute).mockReset();
+    vi.mocked(summarize.summarizeDocument).mockReset();
     afterCallbacks.length = 0;
   });
 
@@ -47,6 +49,13 @@ describe("Ingesta asíncrona con estados", () => {
 
   vi.mock("@/lib/ai", () => ({
     getAiProvider: vi.fn(),
+  }));
+
+  // El cableado de `summarizeDocument` vive en `after()` y ahora el UPDATE
+  // final recibe el resumen como segundo parámetro. Se mockea el módulo
+  // completo para no disparar llamadas reales a Gemini desde este test.
+  vi.mock("@/lib/summarize", () => ({
+    summarizeDocument: vi.fn(),
   }));
 
   describe("POST /api/documents - ingesta asíncrona", () => {
@@ -118,6 +127,8 @@ describe("Ingesta asíncrona con estados", () => {
         embedBatch
       } as unknown as ReturnType<typeof ai.getAiProvider>);
 
+      vi.mocked(summarize.summarizeDocument).mockResolvedValue("Resumen de prueba");
+
       const req = {
         formData: async () => ({
           get: (key: string) => {
@@ -145,10 +156,10 @@ describe("Ingesta asíncrona con estados", () => {
         { taskType: "retrieval_document" }
       );
 
-      // Verificar que se actualizó el estado a 'ready'
+      // Verificar que se actualizó el estado a 'ready' guardando el resumen
       expect(db.execute).toHaveBeenCalledWith(
         expect.stringContaining("UPDATE documents SET status = 'ready'"),
-        ["doc-123"]
+        ["doc-123", "Resumen de prueba"]
       );
     });
 

@@ -8,6 +8,7 @@ import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 // carga de forma perezosa dentro de `extractPdfText`).
 import { chunkText, extractPdfText } from "@/lib/chunking";
 import { extractDocxText } from "@/lib/docx";
+import { summarizeDocument } from "@/lib/summarize";
 
 /** Fila de `documents` tal y como la devuelve el SELECT de abajo. */
 interface DocumentRow {
@@ -17,6 +18,7 @@ interface DocumentRow {
   created_at: Date | string;
   status: string;
   error: string | null;
+  summary: string | null;
 }
 
 /** GET /api/documents — Lista únicamente los documentos del usuario autenticado. */
@@ -36,7 +38,7 @@ export async function GET(req: Request) {
     );
 
     const rows = await query<DocumentRow>(
-      `SELECT id, title, mime_type, created_at, status, error
+      `SELECT id, title, mime_type, created_at, status, error, summary
        FROM documents
        WHERE owner_id = $1
        ORDER BY created_at DESC`,
@@ -157,10 +159,13 @@ export async function POST(req: Request) {
           [docId, ords, contents, vectors]
         );
 
+        // Generar resumen
+        const summary = await summarizeDocument(title, text).catch(() => "");
+
         // Actualizar estado a 'ready'
         await execute(
-          `UPDATE documents SET status = 'ready', error = NULL WHERE id = $1`,
-          [docId]
+          `UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1`,
+          [docId, summary.trim() ? summary : null]
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
