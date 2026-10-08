@@ -67,7 +67,21 @@ Alinea cada cita con el texto fuente exacto.`;
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
-        controller.enqueue(encoder.encode("data: [context]\n\n"));
+        /**
+         * SSE obliga a que cada `data:` sea UNA sola línea: un `\n` dentro
+         * del payload parte el evento y el receptor descarta la continuación
+         * (le llega como línea sin prefijo `data:`). El texto del modelo trae
+         * saltos de línea reales, así que aquí lo repartimos en tantas líneas
+         * `data:` como haga falta; el cliente las vuelve a unir con `\n`.
+         */
+        const send = (payload: string) => {
+          for (const line of payload.split("\n")) {
+            controller.enqueue(encoder.encode(`data: ${line}\n`));
+          }
+          controller.enqueue(encoder.encode("\n"));
+        };
+
+        send("[context]");
         for (const chunk of relevantChunks) {
           const payload = JSON.stringify({
             type: "citation",
@@ -75,9 +89,9 @@ Alinea cada cita con el texto fuente exacto.`;
             source: chunk.title,
             content: chunk.content,
           });
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+          send(payload);
         }
-        controller.enqueue(encoder.encode("data: [start]\n\n"));
+        send("[start]");
 
         // Si la generación falla, NO emitimos [done]: un cliente que solo
         // mira el final del stream daría por buena una respuesta vacía.
@@ -86,7 +100,7 @@ Alinea cada cita con el texto fuente exacto.`;
         try {
           for await (const textPart of stream.textStream) {
             emitted += textPart.length;
-            controller.enqueue(encoder.encode(`data: ${textPart}\n\n`));
+            send(textPart);
           }
           // El SDK de AI registra algunos fallos sin rechazar el iterable:
           // el stream "termina" limpio y sin texto. Sin este guard, [done] se
@@ -103,12 +117,12 @@ Alinea cada cita con el texto fuente exacto.`;
           failed = true;
           const msg = humanError(err);
           const payload = JSON.stringify({ type: "error", message: msg });
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
-          controller.enqueue(encoder.encode(`data: [error: ${msg}]\n\n`));
+          send(payload);
+          send(`[error: ${msg}]`);
         }
 
         if (!failed) {
-          controller.enqueue(encoder.encode("data: [done]\n\n"));
+          send("[done]");
         }
         controller.close();
       },

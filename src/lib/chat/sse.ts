@@ -15,6 +15,56 @@ export type StreamEvent =
 const CONTROL_MARKERS = new Set(['[start]', '[done]', '[context]']);
 
 /**
+ * Acumula los trozos de red y devuelve los payloads `data:` completos.
+ *
+ * Motivo: el texto del modelo trae saltos de línea reales. SSE no permite
+ * un `\n` dentro de un `data:`: hay que repartirlo en varias líneas `data:`
+ * y cerrar el evento con una línea vacía. El receptor debe volver a unirlas
+ * con `\n` ANTES de clasificar.
+ *
+ * Sin esto, cualquier salto de línea del modelo hacía que la continuación
+ * llegara como línea "huérfana" (sin prefijo `data:`) y el bucle la
+ * descartara: la respuesta se quedaba cortada justo en el primer `\n`.
+ *
+ * Los campos que no son `data:` (event:, id:, retry:) y los comentarios se
+ * ignoran, como marca la especificación. Se conserva cada espacio exacto:
+ * un `trim()` aquí se comía el espacio inicial de `" son:"` y degradaba la
+ * lectura del texto unido.
+ */
+export class SSEDecoder {
+  private buffer = '';
+  private data: string[] = [];
+
+  /** Introduce un trozo crudo del stream y devuelve los eventos completos. */
+  push(chunk: string): string[] {
+    this.buffer += chunk;
+    const lines = this.buffer.split('\n');
+    // La última parte puede estar incompleta: se queda para el próximo trozo.
+    this.buffer = lines.pop() ?? '';
+
+    const events: string[] = [];
+    for (const rawLine of lines) {
+      // SSE cierra cada línea con `\n` o `\r\n`.
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+
+      if (line === '') {
+        if (this.data.length > 0) {
+          events.push(this.data.join('\n'));
+          this.data = [];
+        }
+        continue;
+      }
+
+      if (line.startsWith('data:')) {
+        const value = line.slice(5);
+        this.data.push(value.startsWith(' ') ? value.slice(1) : value);
+      }
+    }
+    return events;
+  }
+}
+
+/**
  * Clasifica un payload de `data: ...` del stream SSE de `/api/ask`.
  *
  * Orden importante:

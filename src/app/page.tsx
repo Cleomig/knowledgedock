@@ -11,7 +11,7 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import { authClient } from '@/lib/auth-client';
-import { parseStreamEvent, type Citation } from '@/lib/chat/sse';
+import { parseStreamEvent, SSEDecoder, type Citation } from '@/lib/chat/sse';
 
 interface DocItem {
   id: string;
@@ -138,7 +138,7 @@ export default function Home() {
       if (!reader) throw new Error('No stream');
 
       const decoder = new TextDecoder();
-      let buffer = '';
+      const sse = new SSEDecoder();
       const citations: Citation[] = [];
       /**
        * Acumulador LOCAL. `streamingText` es estado de React y la variable de
@@ -153,13 +153,12 @@ export default function Home() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const event = parseStreamEvent(line.slice(6).trim());
+        // `SSEDecoder` reconstruye los eventos multi-línea: el texto del
+        // modelo puede contener `\n` y, sin reunir las líneas `data:`, el
+        // resto del chunk se perdía y la respuesta salía cortada.
+        for (const payload of sse.push(decoder.decode(value, { stream: true }))) {
+          if (payload === '') continue;
+          const event = parseStreamEvent(payload);
 
           if (event.kind === 'error') throw new Error(event.message);
           if (event.kind === 'skip') continue;

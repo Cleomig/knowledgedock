@@ -280,3 +280,26 @@ describe('contrato de variables de entorno', () => {
     expect(example).toContain(key)
   })
 })
+
+describe('el stream SSE de /api/ask tolera saltos de línea', () => {
+  const src = readFileSync(
+    resolve(ROOT, 'src', 'app', 'api', 'ask', 'route.ts'),
+    'utf8',
+  )
+
+  /**
+   * Regresión: se emitía `data: ${textPart}\n\n` en UNA sola línea. El texto
+   * del modelo trae `\n` reales, y la especificación SSE ignora cualquier
+   * línea que no empiece por `data:`: el cliente descartaba la continuación
+   * y la respuesta salía cortada justo en el primer salto de línea (se veía
+   * en producción con "1. **TAREA.txt** [1], [4]" partido de "2. chat.txt").
+   */
+  it('reparte cada payload en tantas líneas data: como haga falta', () => {
+    expect(src).toMatch(/payload\.split\(["']\\n["']\)/)
+    expect(src).not.toMatch(/data: \$\{textPart\}/)
+  })
+
+  it('envía el texto del modelo por ese repartidor', () => {
+    expect(src).toContain('send(textPart)')
+  })
+})
