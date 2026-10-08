@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { STREAM_IDLE_TIMEOUT_MS, withIdleTimeout } from "@/lib/ai/idle-timeout";
+import {
+  FIRST_CHUNK_TIMEOUT_MS,
+  STREAM_IDLE_TIMEOUT_MS,
+  withIdleTimeout,
+} from "@/lib/ai/idle-timeout";
 
 describe("withIdleTimeout", () => {
   it("devuelve el valor cuando la promesa llega antes del tope", async () => {
@@ -48,5 +52,11 @@ describe("withIdleTimeout", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("el tope de primer trozo es menor que el tope global", () => {
+    // Si no, un primer modelo mudo agotaría el presupuesto de la ruta antes
+    // de que el bucle de respaldo llegara al modelo sano.
+    expect(FIRST_CHUNK_TIMEOUT_MS).toBeLessThan(STREAM_IDLE_TIMEOUT_MS);
   });
 });

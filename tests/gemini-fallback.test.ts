@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GeminiProvider } from "../src/lib/ai/gemini";
+import { FIRST_CHUNK_TIMEOUT_MS } from "../src/lib/ai/idle-timeout";
 
 /**
  * Comportamiento de los modelos de respaldo en `GeminiProvider.streamChat`.
@@ -45,9 +46,19 @@ function throwingStream(chunks: string[], message: string) {
   };
 }
 
+/** Stream que nunca emite ni termina: el modelo se queda mudo sin fallar. */
+function silentStream() {
+  return {
+    async *[Symbol.asyncIterator]() {
+      await new Promise(() => {});
+    },
+  };
+}
+
 type Plan =
   | { text: string }
   | { error: string }
+  | { silent: true }
   | { crash: { chunks: string[]; message: string } };
 
 /** Modelos que el proveedor ha intentado, en orden. */
@@ -72,6 +83,9 @@ function plan(...steps: Plan[]) {
       if ("error" in step) {
         opts.onError?.({ error: new Error(step.error) });
         return { textStream: emptyStream() };
+      }
+      if ("silent" in step) {
+        return { textStream: silentStream() };
       }
       if ("crash" in step) {
         return { textStream: throwingStream(step.crash.chunks, step.crash.message) };
@@ -179,5 +193,38 @@ describe("GeminiProvider.streamChat — modelos de respaldo", () => {
     expect(chunks).toEqual(["texto parcial"]);
     expect((error as Error).message).toContain("explotó a mitad");
     expect(attempts).toHaveLength(1);
+  });
+
+  it("salta de modelo si el primero se queda mudo sin emitir nada", async () => {
+    // Regresión medida en producción el 2026-10-08: el primario devolvía 429
+    // de cuota y el segundo 503, y /api/ask se quedaba mudo 45 s. El silencio
+    // no dispara onError, así que el bucle de respaldo se quedaba esperando
+    // el primer trozo sin llegar JAMÁS al modelo sano.
+    vi.useFakeTimers();
+    try {
+      plan({ silent: true }, { text: "respuesta del respaldo" });
+
+      const pending = drain((await ask(provider())).textStream);
+      await vi.advanceTimersByTimeAsync(FIRST_CHUNK_TIMEOUT_MS);
+      const { chunks, error } = await pending;
+
+      expect(error).toBeNull();
+      expect(chunks.join("")).toBe("respuesta del respaldo");
+      expect(attempts).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invoca streamText sin reintentos para no encadenar backoff", async () => {
+    plan({ text: "hola" });
+
+    await drain((await ask(provider())).textStream);
+
+    // 3 reintentos con backoff son ~17-23 s POR MODELO: con cuatro
+    // candidatos el tope de la ruta se imponía antes de llegar al sano.
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ maxRetries: 0 })
+    );
   });
 });

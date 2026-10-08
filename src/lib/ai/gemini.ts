@@ -9,6 +9,7 @@ import type {
   EmbeddingResult,
 } from "./types";
 import { toPrompt } from "./prompt";
+import { FIRST_CHUNK_TIMEOUT_MS, withIdleTimeout } from "./idle-timeout";
 
 /**
  * Dimensión efectiva de los vectores.
@@ -103,6 +104,9 @@ export class GeminiProvider implements AiProvider {
       try {
         const result = await generateText({
           model: this.sdk.languageModel(model),
+          // Ver `maxRetries` en `streamText`: reintentar el mismo modelo es
+          // más lento y menos fiable que pasar al siguiente.
+          maxRetries: 0,
           ...(instructions ? { instructions } : {}),
           messages: rest,
         });
@@ -141,6 +145,20 @@ export class GeminiProvider implements AiProvider {
         try {
           const result = streamText({
             model: sdk.languageModel(model),
+            /**
+             * Cero reintentos por modelo.
+             *
+             * El SDK reintenta solo con backoff exponencial: medido el
+             * 2026-10-08, 3 intentos tardaban ~17-23 s POR MODELO. Con cuatro
+             * candidatos eso son hasta 90 s antes de llegar al primero sano,
+             * y el tope del consumidor (45 s) se imponía mucho antes: el
+             * usuario veía un error en vez de la respuesta que sí estaba a
+             * un salto de distancia.
+             *
+             * El diseño ya apostaba por el siguiente modelo ("aunque los
+             * reintentos del SDK agoten"), solo que no se le daba prisa.
+             */
+            maxRetries: 0,
             ...(instructions ? { instructions } : {}),
             messages: rest,
             onError: (event) => {
@@ -155,8 +173,21 @@ export class GeminiProvider implements AiProvider {
           const iterator = result.textStream[Symbol.asyncIterator]();
 
           // Saltamos trozos vacíos: solo cuentan si llega texto de verdad.
-          let step = await iterator.next();
-          while (!step.done && step.value === "") step = await iterator.next();
+          //
+          // Con tope, porque el silencio NO dispara `onError`: si el modelo no
+          // llega a emitir nada, `await iterator.next()` se quedaría esperando
+          // y el `for (const model of candidates)` de arriba nunca probaría el
+          // siguiente. Un modelo mudo debe FALLAR y ceder el turno.
+          let step = await withIdleTimeout(
+            iterator.next(),
+            FIRST_CHUNK_TIMEOUT_MS
+          );
+          while (!step.done && step.value === "") {
+            step = await withIdleTimeout(
+              iterator.next(),
+              FIRST_CHUNK_TIMEOUT_MS
+            );
+          }
 
           if (step.done || failure !== null) {
             lastError = failure ?? new Error(`${model} no devolvió texto`);
