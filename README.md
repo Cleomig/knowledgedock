@@ -12,6 +12,20 @@ Regístrate o inicia sesión para cargar, buscar y consultar tus documentos. Las
 [![React 19.3.0](https://img.shields.io/badge/React-19.3.0-149ECA?logo=react&logoColor=white)](https://react.dev/)
 [![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Vercel](https://img.shields.io/badge/Deployed-Vercel-000000?logo=vercel&logoColor=white)](https://knowledgedock.vercel.app)
+
+## Demo en vivo
+
+**[knowledgedock.vercel.app](https://knowledgedock.vercel.app)** — Vercel + Neon Postgres, con CI en GitHub Actions.
+
+Cómo probarlo en un minuto:
+
+1. **Regístrate** con correo y contraseña en [`/login`](https://knowledgedock.vercel.app/login).
+2. **Carga un documento** (`.txt`, `.md` o `.pdf`). El backend extrae el texto, lo divide en fragmentos de 500 caracteres con 50 de solapamiento y genera embeddings con `gemini-embedding-001` (768 dimensiones).
+3. **Busca por significado**, no por palabras exactas: `POST /api/search` genera el embedding de la consulta y devuelve hasta 10 fragmentos por similitud coseno con umbral `0.5`.
+4. **Pregunta y pide citas**: `/api/ask` recupera los 5 fragmentos más cercanos y transmite la respuesta con las fuentes mediante SSE.
+
+Cada cuenta ve solo sus documentos: sin sesión las rutas de datos responden `401`, y la recuperación de fragmentos se filtra por `user.id`.
 
 ## Captura de pantalla
 
