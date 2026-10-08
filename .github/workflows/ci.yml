@@ -14,6 +14,11 @@ jobs:
     env:
       # Opcional: si no se configura el secret, las pruebas de integración con Gemini se omiten.
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # `auth.ts` valida ambas al importarse, y `next build` importa las rutas.
+      # Son marcadores desechables solo para CI: no conectan a ninguna base y
+      # sustituyen a los valores reales de .env.local / .env.production.
+      BETTER_AUTH_SECRET: ci-only-${{ github.run_id }}-${{ github.run_attempt }}
+      DATABASE_URL: postgresql://knowledgedock:ci-only@localhost:5432/knowledgedock
     steps:
       - uses: actions/checkout@v4
 

@@ -32,12 +32,15 @@ const describeIf = apiKey ? describe : describe.skip;
 const chatIt = process.env.RUN_CHAT_INTEGRATION === "1" ? it : it.skip;
 
 describeIf("GeminiProvider (integración real)", () => {
-  const provider = new GeminiProvider(process.env);
+  // `describe.skip` ejecuta el cuerpo del bloque: solo omite los `it`.
+  // Por eso el proveedor se construye bajo demanda: el constructor lanza
+  // si falta GEMINI_API_KEY y reventaría CI aunque la suite estuviera saltada.
+  const getProvider = () => new GeminiProvider(process.env);
 
   it(
     "embed devuelve exactamente 768 dimensiones",
     async () => {
-      const { vector } = await provider.embed("hola mundo", {
+      const { vector } = await getProvider().embed("hola mundo", {
         taskType: "retrieval_query",
       });
 
@@ -51,7 +54,7 @@ describeIf("GeminiProvider (integración real)", () => {
     "embedBatch devuelve un vector de 768 por cada texto, en orden",
     async () => {
       const texts = ["primer fragmento", "segundo fragmento", "tercer fragmento"];
-      const results = await provider.embedBatch(texts, {
+      const results = await getProvider().embedBatch(texts, {
         taskType: "retrieval_document",
       });
 
@@ -67,13 +70,13 @@ describeIf("GeminiProvider (integración real)", () => {
     "textos relacionados puntúan más alto que textos distintos",
     async () => {
       const [q, a, b] = await Promise.all([
-        provider.embed("como conectarme a la base de datos", {
+        getProvider().embed("como conectarme a la base de datos", {
           taskType: "retrieval_query",
         }),
-        provider.embed("La DATABASE_URL de Neon se configura en .env.local", {
+        getProvider().embed("La DATABASE_URL de Neon se configura en .env.local", {
           taskType: "retrieval_document",
         }),
-        provider.embed("El chunking divide el texto en partes de 500 caracteres", {
+        getProvider().embed("El chunking divide el texto en partes de 500 caracteres", {
           taskType: "retrieval_document",
         }),
       ]);
@@ -102,7 +105,7 @@ describeIf("GeminiProvider (integración real)", () => {
   chatIt(
     "chat responde con el modelo configurado",
     async () => {
-      const { text } = await provider.chat([
+      const { text } = await getProvider().chat([
         { role: "user", content: "Responde unicamente con: ok" },
       ]);
 
