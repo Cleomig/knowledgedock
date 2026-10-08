@@ -1,34 +1,8 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
+import { humanError } from "@/lib/ai/errors";
 import { query, execute } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
-
-/**
- * Convierte un error del proveedor IA en algo que tenga sentido para el
- * usuario en la UI.
- *
- * Los errores del SDK de AI son multi-líneas y muy verbosos ("Failed after
- * 3 attempts. Last error: AI_APICallError: ... at file:///C:/..."), así que
- * meterlos tal cual en un `[error: ...]` produce un muro de texto ilegible.
- * Para cuota de Gemini, además, la línea útil no es la primera sino la que
- * empieza por "Quota exceeded for metric:".
- */
-function humanError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const quota = lines.find((l) => l.startsWith("Quota exceeded for metric:"));
-  if (quota) {
-    const retry = lines.find((l) => l.startsWith("Please retry in"));
-    return retry ? `${quota} ${retry}.` : quota;
-  }
-
-  const first = lines[0] ?? "Error desconocido del proveedor IA";
-  return first.length > 300 ? `${first.slice(0, 297)}…` : first;
-}
 
 /** POST /api/ask — Streaming */
 export async function POST(req: Request) {
