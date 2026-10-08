@@ -36,7 +36,8 @@ Instrucciones:
       { role: "user", content: prompt },
     ]);
     return result.text ?? "";
-  } catch {
+  } catch (err) {
+    console.error("[summarize] Error:", err instanceof Error ? err.message : String(err));
     return "";
   }
 }
