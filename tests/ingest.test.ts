@@ -4,6 +4,8 @@ import * as ai from "ai";
 import { POST } from "@/app/api/documents/route";
 import * as auth from "@/lib/auth-session";
 
+// Mock de after para los tests
+const afterCallbacks: (() => Promise<void>)[] = [];
 vi.mock("next/server", () => ({
   NextResponse: {
     json: vi.fn((body, init) => {
@@ -13,6 +15,9 @@ vi.mock("next/server", () => ({
       });
     }),
   },
+  after: vi.fn((callback: () => Promise<void>) => {
+    afterCallbacks.push(callback);
+  }),
 }));
 
 vi.mock("ai", async (importOriginal) => {
@@ -36,6 +41,7 @@ vi.mock("@/lib/auth-session", () => ({
 describe("Ingestión y Embeddings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    afterCallbacks.length = 0;
   });
 
   describe("GeminiProvider embedBatch", () => {

@@ -94,7 +94,7 @@ export default function ChatMessage({ role, content, citations, isStreaming = fa
                 onClick={() => jumpToCitation(n)}
                 title={`Ver la cita ${n}`}
                 aria-label={`Ir a la cita ${n}`}
-                className="mx-0.5 cursor-pointer rounded bg-accent px-1 font-medium text-accent-foreground underline decoration-dotted underline-offset-2 hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="cursor-pointer rounded bg-accent px-1 font-medium text-accent-foreground underline decoration-dotted underline-offset-2 hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {`[${n}]`}
               </button>

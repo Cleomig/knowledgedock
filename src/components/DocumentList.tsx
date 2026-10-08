@@ -1,11 +1,13 @@
 'use client';
 
-import { FileText, Trash2 } from 'lucide-react';
+import { FileText, Loader2, Trash2 } from 'lucide-react';
 
 interface DocumentItem {
   id: string;
   title: string;
   createdAt: string;
+  status?: 'processing' | 'ready' | 'failed' | string;
+  error?: string | null;
 }
 
 interface DocumentListProps {
@@ -46,7 +48,28 @@ export default function DocumentList({ documents, onDelete, loading }: DocumentL
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
-              <p className="text-xs text-muted-foreground">{doc.createdAt}</p>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="truncate">{doc.createdAt}</span>
+                {doc.status === 'processing' && (
+                  <span role="status" className="inline-flex shrink-0 items-center gap-1 text-amber-600">
+                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                    Procesando…
+                  </span>
+                )}
+                {doc.status === 'failed' && (
+                  <span
+                    className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-medium text-destructive"
+                    title={doc.error ?? 'El procesamiento falló'}
+                  >
+                    Error
+                  </span>
+                )}
+              </div>
+              {doc.status === 'failed' && doc.error && (
+                <p className="truncate text-xs text-destructive/80" title={doc.error}>
+                  {doc.error}
+                </p>
+              )}
             </div>
           </div>
           <button

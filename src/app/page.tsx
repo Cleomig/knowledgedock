@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import UploadDropzone from '@/components/UploadDropzone';
@@ -17,6 +17,8 @@ interface DocItem {
   id: string;
   title: string;
   createdAt: string;
+  status?: 'processing' | 'ready' | 'failed' | string;
+  error?: string | null;
 }
 
 interface ChatMsg {
@@ -67,38 +69,73 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Load private documents only after the session is resolved.
-  // Sin sesión no se limpia el estado aquí: mientras no haya usuario la lista
-  // ni siquiera se pinta (más abajo hay un early-return con la pantalla de
-  // acceso), así que ese reset era trabajo muerto y además violaba
-  // `react-hooks/set-state-in-effect` (setState síncrono dentro de un efecto).
-  useEffect(() => {
-    if (authPending) return;
-    if (!userId) return;
-    void fetchDocuments();
-  }, [authPending, userId]);
-
-  async function fetchDocuments() {
-    setDocsLoading(true);
-    setDocsError(null);
+  /**
+   * Descarga la lista de documentos.
+   *
+   * `silent` evita el skeleton y el estado de error: lo usan el sondeo de
+   * documentos `processing` y el refresco tras subir/borrar para que la
+   * lista no parpadee mientras se actualiza.
+   *
+   * Es un `useCallback` estable para que los efectos que lo invocan puedan
+   * declararlo como dependencia (`react-hooks/exhaustive-deps`).
+   */
+  const loadDocuments = useCallback(async (silent: boolean) => {
+    if (!silent) {
+      setDocsLoading(true);
+      setDocsError(null);
+    }
     try {
       const res = await fetch('/api/documents');
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
       setDocuments((data.documents ?? []) as DocItem[]);
     } catch (err) {
-      setDocsError(err instanceof Error ? err.message : 'Error al cargar documentos');
+      if (!silent) {
+        setDocsError(err instanceof Error ? err.message : 'Error al cargar documentos');
+      }
     } finally {
-      setDocsLoading(false);
+      if (!silent) setDocsLoading(false);
     }
-  }
+  }, []);
+
+  const fetchDocuments = useCallback(() => loadDocuments(false), [loadDocuments]);
+
+  const refreshDocuments = useCallback(() => loadDocuments(true), [loadDocuments]);
+
+  // Load private documents only after the session is resolved.
+  // Sin sesión no se limpia el estado aquí: mientras no haya usuario la lista
+  // ni siquiera se pinta (más abajo hay un early-return con la pantalla de
+  // acceso), así que ese reset era trabajo muerto y además violaba
+  // `react-hooks/set-state-in-effect` (setState síncrono dentro de un efecto).
+  // Por lo mismo, la carga inicial se difiere a un macrotask: `loadDocuments`
+  // enciende `docsLoading` de forma síncrona y la regla prohíbe que un
+  // efecto arranque esa cadena directamente (renders en cascada).
+  useEffect(() => {
+    if (authPending) return;
+    if (!userId) return;
+    const timer = setTimeout(() => {
+      void fetchDocuments();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [authPending, userId, fetchDocuments]);
+
+  // El índice corre en segundo plano (`after()` en el POST), así que la lista
+  // se sondea en silencio mientras quede algún documento `processing`.
+  const hasProcessing = documents.some((d) => d.status === 'processing');
+  useEffect(() => {
+    if (authPending || !userId || !hasProcessing) return;
+    const timer = setInterval(() => {
+      void refreshDocuments();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [authPending, userId, hasProcessing, refreshDocuments]);
 
   async function handleDelete(docId: string) {
     try {
       const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
-      await fetchDocuments();
+      await refreshDocuments();
     } catch (err) {
       setDocsError(err instanceof Error ? err.message : 'Error al borrar');
     }
@@ -285,7 +322,7 @@ export default function Home() {
         <aside className="flex flex-col gap-6 md:w-1/3">
           <section>
             <h2 className="mb-3 text-sm font-semibold text-foreground uppercase tracking-wide">Subir Documento</h2>
-            <UploadDropzone onUploaded={fetchDocuments} onError={(msg) => setDocsError(msg)} />
+            <UploadDropzone onUploaded={refreshDocuments} onError={(msg) => setDocsError(msg)} />
           </section>
 
           <section className="flex-1">

@@ -14,9 +14,15 @@ export default function UploadDropzone({ onUploaded, onError }: UploadDropzonePr
   const [errorMsg, setErrorMsg] = useState('');
 
   const processFile = useCallback(async (file: File) => {
-    const allowed = ['text/plain', 'text/markdown', 'application/pdf', 'text/x-markdown'];
-    if (!allowed.includes(file.type) && !file.name.match(/\.(txt|md|pdf)$/i)) {
-      const msg = 'Formato no soportado. Usa .txt, .md o .pdf';
+    const allowed = [
+      'text/plain',
+      'text/markdown',
+      'application/pdf',
+      'text/x-markdown',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    if (!allowed.includes(file.type) && !file.name.match(/\.(txt|md|pdf|docx)$/i)) {
+      const msg = 'Formato no soportado. Usa .txt, .md, .pdf o .docx';
       setErrorMsg(msg);
       setStatus('error');
       onError?.(msg);
@@ -88,13 +94,13 @@ export default function UploadDropzone({ onUploaded, onError }: UploadDropzonePr
 
         <div>
           <p className="text-sm font-medium text-foreground">
-            {status === 'uploading' && 'Indexando...'}
-            {status === 'done' && '¡Documento indexado!'}
+            {status === 'uploading' && 'Subiendo...'}
+            {status === 'done' && '¡Documento subido! Se está indexando.'}
             {status === 'error' && 'Error'}
             {status === 'idle' && 'Arrastra o selecciona un archivo'}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Soporta .txt, .md y .pdf
+            Soporta .txt, .md, .pdf y .docx
           </p>
         </div>
         {status === 'error' && errorMsg && (
