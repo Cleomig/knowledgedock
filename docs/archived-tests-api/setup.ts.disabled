@@ -1,0 +1,42 @@
+import { vi, beforeEach, afterEach } from 'vitest'
+
+// Mock para @/lib/db
+vi.mock('@/lib/db', () => ({
+  query: vi.fn(),
+  execute: vi.fn()
+}))
+
+// Mock para @/lib/ai
+vi.mock('@/lib/ai', () => ({
+  getAiProvider: vi.fn().mockReturnValue({
+    chat: vi.fn(),
+    embed: vi.fn(),
+    embedBatch: vi.fn(),
+    streamChat: vi.fn()
+  })
+}))
+
+// Mock para @/lib/chunking
+vi.mock('@/lib/chunking', () => ({
+  chunkText: vi.fn(),
+  extractPdfText: vi.fn()
+}))
+
+// Mock para process.env
+vi.mock('process', async () => {
+  const actual = await vi.importActual<typeof import('process')>('process')
+  return {
+    ...actual,
+    env: {
+      ...actual.env,
+      AI_PROVIDER: 'mock',
+      DEFAULT_OWNER_ID: 'test-user',
+      NODE_ENV: 'test'
+    }
+  }
+})
+
+// Limpiar mocks después de cada test
+afterEach(() => {
+  vi.clearAllMocks()
+})

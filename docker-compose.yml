@@ -1,0 +1,46 @@
+# KnowledgeDock — Docker Compose (entorno local de desarrollo)
+#
+# Levanta PostgreSQL 16 con la extensión pgvector lista para usar.
+# Los datos persistentes se guardan en el volumen `knowledgedock_pgdata`.
+#
+# Variables que usa esta configuración:
+#   POSTGRES_USER     → usuario de la BD (valor por defecto: knowledgedock)
+#   POSTGRES_PASSWORD → contraseña (valor por defecto: dev_password_2024)
+#   POSTGRES_DB       → nombre de la base (valor por defecto: knowledgedock)
+#
+# El puerto del contenedor es 55432 en el anfitrión, no 5432: en esta máquina
+# ya hay un PostgreSQL 18 nativo (servicio postgresql-x64-18) escuchando en
+# 5432, y ambos compitiendo provocaba "password authentication failed".
+# 5433 quedaba reservado por Docker, así que se usa un puerto alto libre.
+#
+# La aplicación leerá DATABASE_URL desde .env.local o .env.
+# Ejecuta scripts/setup-db.ps1 para crear el esquema automáticamente.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: knowledgedock_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: knowledgedock
+      POSTGRES_PASSWORD: dev_password_2024
+      POSTGRES_DB: knowledgedock
+    ports:
+      - "55432:5432"
+    volumes:
+      - knowledgedock_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledgedock -d knowledgedock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - knowledgedock
+
+volumes:
+  knowledgedock_pgdata:
+    name: knowledgedock_pgdata
+
+networks:
+  knowledgedock:
+    name: knowledgedock_net

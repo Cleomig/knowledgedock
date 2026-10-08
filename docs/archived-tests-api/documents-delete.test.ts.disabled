@@ -1,0 +1,143 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { DELETE } from '@/app/api/documents/[id]/route'
+
+describe('API: DELETE /api/documents/[id]', () => {
+  const mockExecute = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    
+    // Mock para @/lib/db
+    vi.doMock('@/lib/db', () => ({
+      query: vi.fn(),
+      execute: mockExecute
+    }))
+    
+    // Mock para eliminación exitosa
+    mockExecute.mockResolvedValue(1)
+  })
+
+  it('debería eliminar documento existente exitosamente', async () => {
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(200)
+    const data = await response.json()
+    expect(data).toEqual({ deleted: true })
+    
+    // Verificar que se eliminó el documento (chunks se eliminan primero)
+    expect(mockExecute).toHaveBeenCalledTimes(2)
+    
+    const firstCall = mockExecute.mock.calls[0]
+    const secondCall = mockExecute.mock.calls[1]
+    
+    expect(firstCall[0]).toContain('DELETE FROM chunks')
+    expect(firstCall[1]).toEqual([id])
+    
+    expect(secondCall[0]).toContain('DELETE FROM documents')
+    expect(secondCall[1]).toEqual([id])
+  })
+
+  it('debería retornar 404 si documento no existe', async () => {
+    mockExecute.mockResolvedValue(0) // No rows affected
+    
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(404)
+    const data = await response.json()
+    expect(data.error.code).toBe('NOT_FOUND')
+    expect(data.error.message).toContain('Documento no encontrado')
+  })
+
+  it('debería retornar 400 para ID inválido', async () => {
+    const id = 'invalid-id!'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(400)
+    const data = await response.json()
+    expect(data.error.code).toBe('INVALID_ID')
+    expect(data.error.message).toContain('ID de documento inválido')
+  })
+
+  it('debería manejar error de base de datos', async () => {
+    mockExecute.mockRejectedValue(new Error('Database error'))
+    
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(500)
+    const data = await response.json()
+    expect(data.error.code).toBe('INTERNAL_ERROR')
+  })
+
+  it('debería eliminar chunks antes que documentos', async () => {
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    await DELETE(request, { params })
+    
+    // Verificar orden de ejecución: chunks primero, luego documento
+    const calls = mockExecute.mock.calls
+    
+    expect(calls[0][0]).toContain('chunks')
+    expect(calls[1][0]).toContain('documents')
+  })
+
+  it('debería manejar error en primer DELETE (chunks)', async () => {
+    mockExecute.mockRejectedValueOnce(new Error('Chunks delete failed'))
+    
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(500)
+    const data = await response.json()
+    expect(data.error.code).toBe('INTERNAL_ERROR')
+  })
+
+  it('debería manejar error en segundo DELETE (documento)', async () => {
+    mockExecute
+      .mockResolvedValueOnce(1) // Primera llamada (chunks) ok
+      .mockRejectedValueOnce(new Error('Document delete failed')) // Segunda llamada falla
+    
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    const params = Promise.resolve({ id })
+    const request = new Request(`http://localhost:3000/api/documents/${id}`, {
+      method: 'DELETE'
+    })
+    
+    const response = await DELETE(request, { params })
+    
+    expect(response.status).toBe(500)
+    const data = await response.json()
+    expect(data.error.code).toBe('INTERNAL_ERROR')
+  })
+})

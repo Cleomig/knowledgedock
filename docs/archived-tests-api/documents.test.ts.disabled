@@ -1,0 +1,260 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { GET, POST } from '@/app/api/documents/route'
+
+describe('API: /api/documents', () => {
+  const mockQuery = vi.fn()
+  const mockExecute = vi.fn()
+  const mockEmbedBatch = vi.fn()
+  const mockChunkText = vi.fn()
+  const mockExtractPdfText = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    
+    // Mock para @/lib/db
+    vi.doMock('@/lib/db', () => ({
+      query: mockQuery,
+      execute: mockExecute
+    }))
+    
+    // Mock para @/lib/ai
+    vi.doMock('@/lib/ai', () => ({
+      getAiProvider: vi.fn().mockReturnValue({
+        chat: vi.fn(),
+        embed: vi.fn(),
+        embedBatch: mockEmbedBatch,
+        streamChat: vi.fn()
+      })
+    }))
+    
+    // Mock para @/lib/chunking
+    vi.doMock('@/lib/chunking', () => ({
+      chunkText: mockChunkText,
+      extractPdfText: mockExtractPdfText
+    }))
+    
+    // Mock para lista de documentos
+    mockQuery.mockResolvedValue([
+      {
+        id: 'doc-1',
+        title: 'Documento 1',
+        mime_type: 'text/plain',
+        storage_key: 'documents/doc-1.txt',
+        created_at: '2024-01-01T00:00:00Z'
+      },
+      {
+        id: 'doc-2',
+        title: 'Documento 2',
+        mime_type: 'application/pdf',
+        storage_key: 'documents/doc-2.pdf',
+        created_at: '2024-01-02T00:00:00Z'
+      }
+    ])
+    
+    // Mock para chunking
+    mockChunkText.mockReturnValue(['chunk1', 'chunk2', 'chunk3'])
+    
+    // Mock para embeddings batch
+    mockEmbedBatch.mockResolvedValue([
+      { vector: Array.from({ length: 768 }, (_, i) => 0.1) },
+      { vector: Array.from({ length: 768 }, (_, i) => 0.2) },
+      { vector: Array.from({ length: 768 }, (_, i) => 0.3) }
+    ])
+    
+    // Mock para inserts
+    mockExecute.mockResolvedValue(1)
+    
+    // Mock para PDF extraction
+    mockExtractPdfText.mockResolvedValue('Texto extraído de PDF')
+  })
+
+  describe('GET /api/documents', () => {
+    it('debería retornar lista de documentos del usuario', async () => {
+      const response = await GET()
+      
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      
+      expect(data).toHaveProperty('documents')
+      expect(Array.isArray(data.documents)).toBe(true)
+      expect(data.documents.length).toBe(2)
+      
+      // Verificar estructura de cada documento
+      data.documents.forEach((doc: any) => {
+        expect(doc).toHaveProperty('id')
+        expect(doc).toHaveProperty('title')
+        expect(doc).toHaveProperty('mime_type')
+        expect(doc).toHaveProperty('storage_key')
+        expect(doc).toHaveProperty('created_at')
+      })
+    })
+
+    it('debería retornar array vacío si usuario no tiene documentos', async () => {
+      mockQuery.mockResolvedValue([])
+      
+      const response = await GET()
+      
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data.documents).toEqual([])
+    })
+
+    it('debería manejar error de base de datos', async () => {
+      mockQuery.mockRejectedValue(new Error('Database error'))
+      
+      const response = await GET()
+      
+      expect(response.status).toBe(500)
+      const data = await response.json()
+      expect(data.error.code).toBe('INTERNAL_ERROR')
+    })
+  })
+
+  describe('POST /api/documents', () => {
+    it('debería retornar 400 si no hay archivo', async () => {
+      const formData = new FormData()
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('MISSING_FILE')
+    })
+
+    it('debería retornar 400 si archivo está vacío', async () => {
+      const formData = new FormData()
+      const emptyFile = new File([''], 'empty.txt', { type: 'text/plain' })
+      formData.append('file', emptyFile)
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('EMPTY_CONTENT')
+    })
+
+    it('debería retornar 400 para tipo de archivo no soportado', async () => {
+      const formData = new FormData()
+      const unsupportedFile = new File(['contenido'], 'unsupported.exe', { type: 'application/exe' })
+      formData.append('file', unsupportedFile)
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('UNSUPPORTED_TYPE')
+    })
+
+    it('debería procesar archivo de texto exitosamente', async () => {
+      const formData = new FormData()
+      const textContent = 'Este es el contenido del documento de texto. '.repeat(50)
+      const textFile = new File([textContent], 'document.txt', { type: 'text/plain' })
+      formData.append('file', textFile)
+      
+      // Mock para insert de documento
+      mockQuery.mockResolvedValueOnce([{ id: 'new-doc-id' }])
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      
+      expect(data).toHaveProperty('id')
+      expect(data).toHaveProperty('title')
+      
+      // Verificar que se llamó a chunkText
+      expect(mockChunkText).toHaveBeenCalled()
+      
+      // Verificar que se generaron embeddings
+      expect(mockEmbedBatch).toHaveBeenCalledWith(['chunk1', 'chunk2', 'chunk3'], { taskType: 'retrieval_document' })
+    })
+
+    it('debería procesar archivo markdown exitosamente', async () => {
+      const formData = new FormData()
+      const mdContent = '# Título\n\nEste es contenido **markdown**.'
+      const mdFile = new File([mdContent], 'document.md', { type: 'text/markdown' })
+      formData.append('file', mdFile)
+      
+      mockQuery.mockResolvedValueOnce([{ id: 'new-doc-id' }])
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data.id).toBe('new-doc-id')
+    })
+
+    it('debería procesar archivo PDF exitosamente', async () => {
+      const formData = new FormData()
+      const pdfFile = new File(['fake pdf content'], 'document.pdf', { type: 'application/pdf' })
+      formData.append('file', pdfFile)
+      
+      mockQuery.mockResolvedValueOnce([{ id: 'new-doc-id' }])
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(200)
+      expect(mockExtractPdfText).toHaveBeenCalled()
+    })
+
+    it('debería manejar error de chunking (no chunks generados)', async () => {
+      mockChunkText.mockReturnValue([])
+      
+      const formData = new FormData()
+      const textFile = new File(['texto'], 'document.txt', { type: 'text/plain' })
+      formData.append('file', textFile)
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('NO_CHUNKS')
+    })
+
+    it('debería manejar error de base de datos al insertar documento', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Database error'))
+      
+      const formData = new FormData()
+      const textFile = new File(['contenido'], 'document.txt', { type: 'text/plain' })
+      formData.append('file', textFile)
+      
+      const request = new Request('http://localhost:3000/api/documents', {
+        method: 'POST',
+        body: formData
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(500)
+      const data = await response.json()
+      expect(data.error.code).toBe('INTERNAL_ERROR')
+    })
+  })
+})

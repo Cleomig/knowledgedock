@@ -1,0 +1,165 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { POST } from '@/app/api/search/route'
+
+describe('API: POST /api/search', () => {
+  const mockQuery = vi.fn()
+  const mockEmbed = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    
+    // Mock para @/lib/db
+    vi.doMock('@/lib/db', () => ({
+      query: mockQuery,
+      execute: vi.fn()
+    }))
+    
+    // Mock para @/lib/ai - recrear dentro del test
+    vi.doMock('@/lib/ai', () => ({
+      getAiProvider: vi.fn().mockReturnValue({
+        chat: vi.fn(),
+        embed: mockEmbed,
+        embedBatch: vi.fn(),
+        streamChat: vi.fn()
+      })
+    }))
+    
+    // Configurar mock para query de búsqueda
+    mockQuery.mockResolvedValue([
+      {
+        content: 'Contenido del primer chunk',
+        ord: 0,
+        document_id: 'doc-1',
+        title: 'Documento 1',
+        similarity: '0.85'
+      },
+      {
+        content: 'Contenido del segundo chunk',
+        ord: 1,
+        document_id: 'doc-1',
+        title: 'Documento 1',
+        similarity: '0.75'
+      }
+    ])
+    
+    // Mock para embedding
+    mockEmbed.mockResolvedValue({
+      vector: Array.from({ length: 768 }, (_, i) => 0.5)
+    })
+  })
+
+  it('debería retornar 400 si no hay body', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST'
+    })
+    const response = await POST(request)
+    
+    expect(response.status).toBe(400)
+    const data = await response.json()
+    expect(data.error.code).toBe('INVALID_REQUEST')
+  })
+
+  it('debería retornar 400 si query está vacía', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '' })
+    })
+    const response = await POST(request)
+    
+    expect(response.status).toBe(400)
+    const data = await response.json()
+    expect(data.error.code).toBe('INVALID_REQUEST')
+  })
+
+  it('debería retornar resultados de búsqueda exitosa', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test search' })
+    })
+    const response = await POST(request)
+    
+    expect(response.status).toBe(200)
+    const data = await response.json()
+    
+    expect(data).toHaveProperty('query')
+    expect(data.query).toBe('test search')
+    expect(data).toHaveProperty('results')
+    expect(Array.isArray(data.results)).toBe(true)
+    expect(data.results.length).toBe(2) // Los 2 resultados mockeados
+    
+    // Verificar estructura de cada resultado
+    data.results.forEach((result: any) => {
+      expect(result).toHaveProperty('content')
+      expect(result).toHaveProperty('ord')
+      expect(result).toHaveProperty('documentId')
+      expect(result).toHaveProperty('title')
+      expect(result).toHaveProperty('similarity')
+      expect(typeof result.similarity).toBe('number')
+      expect(result.similarity).toBeGreaterThan(0)
+    })
+  })
+
+  it('debería llamar a la base de datos con la query correcta y umbral 0.5', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test' })
+    })
+    
+    await POST(request)
+    
+    expect(mockQuery).toHaveBeenCalled()
+    expect(mockEmbed).toHaveBeenCalledWith('test', { taskType: 'retrieval_query' })
+    
+    // Verificar que usa umbral 0.5 por defecto
+    const sql = mockQuery.mock.calls[0][0] as string
+    const params = mockQuery.mock.calls[0][1] as any[]
+    
+    expect(sql).toContain('WHERE 1 - (c.embedding <=> $1::vector) >= $2')
+    expect(params[1]).toBe(0.5) // Umbral por defecto
+  })
+
+  it('debería respetar el parámetro threshold personalizado', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test', threshold: 0.8 })
+    })
+    
+    await POST(request)
+    
+    const params = mockQuery.mock.calls[0][1] as any[]
+    expect(params[1]).toBe(0.8) // Umbral personalizado
+  })
+
+  it('debería limitar a 10 resultados', async () => {
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test' })
+    })
+    
+    await POST(request)
+    
+    const sql = mockQuery.mock.calls[0][0] as string
+    expect(sql).toContain('LIMIT 10')
+  })
+
+  it('debería manejar error de base de datos correctamente', async () => {
+    mockQuery.mockRejectedValue(new Error('Database error'))
+    
+    const request = new Request('http://localhost:3000/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test' })
+    })
+    
+    const response = await POST(request)
+    
+    expect(response.status).toBe(500)
+    const data = await response.json()
+    expect(data.error.code).toBe('INTERNAL_ERROR')
+  })
+})

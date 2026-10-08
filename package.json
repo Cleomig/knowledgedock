@@ -1,0 +1,50 @@
+{
+  "name": "knowledge-dock",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit/",
+    "test:integration": "vitest run tests/integration/",
+    "test:api": "vitest run tests/api/"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.90",
+    "@ai-sdk/groq": "^4.0.57",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.131",
+    "better-auth": "^1.7.7",
+    "lucide-react": "^1.52.0",
+    "next": "16.4.0",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.23.1",
+    "pgvector": "^0.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^20",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@vitest/ui": "^2.1.9",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.0",
+    "jsdom": "^25.0.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^2.1.9"
+  }
+}

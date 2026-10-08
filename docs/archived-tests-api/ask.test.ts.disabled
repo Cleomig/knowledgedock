@@ -1,0 +1,289 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { POST } from '@/app/api/ask/route'
+
+describe('API: POST /api/ask', () => {
+  const mockQuery = vi.fn()
+  const mockEmbed = vi.fn()
+  const mockStreamChat = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    
+    // Mock para @/lib/db
+    vi.doMock('@/lib/db', () => ({
+      query: mockQuery,
+      execute: vi.fn()
+    }))
+    
+    // Mock para @/lib/ai con streamChat
+    vi.doMock('@/lib/ai', () => ({
+      getAiProvider: vi.fn().mockReturnValue({
+        chat: vi.fn(),
+        embed: mockEmbed,
+        embedBatch: vi.fn(),
+        streamChat: mockStreamChat
+      })
+    }))
+    
+    // Mock para resultados de búsqueda semántica
+    mockQuery.mockResolvedValue([
+      {
+        content: 'Primer chunk relevante para la pregunta',
+        ord: 0,
+        title: 'Documento 1',
+        doc_id: 'doc-1',
+        similarity: '0.88'
+      },
+      {
+        content: 'Segundo chunk con información adicional',
+        ord: 1,
+        title: 'Documento 1',
+        doc_id: 'doc-1',
+        similarity: '0.76'
+      }
+    ])
+    
+    // Mock para embedding
+    mockEmbed.mockResolvedValue({
+      vector: Array.from({ length: 768 }, (_, i) => 0.5)
+    })
+    
+    // Mock para streamChat que retorna un async iterable
+    async function* mockTextStream() {
+      yield 'Esta es '
+      yield 'una respuesta '
+      yield 'generada por IA'
+    }
+    
+    mockStreamChat.mockResolvedValue({
+      textStream: mockTextStream()
+    })
+  })
+
+  describe('Validación de entrada', () => {
+    it('debería retornar 400 si no hay body', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('INVALID_REQUEST')
+    })
+
+    it('debería retornar 400 si pregunta está vacía', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: '' })
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('INVALID_REQUEST')
+    })
+
+    it('debería retornar 400 si falta el campo question', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otroCampo: 'valor' })
+      })
+      const response = await POST(request)
+      
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error.code).toBe('INVALID_REQUEST')
+    })
+  })
+
+  describe('Respuesta SSE (Server-Sent Events)', () => {
+    it('debería retornar stream SSE con encabezados correctos', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: '¿Qué es KnowledgeDock?' })
+      })
+      
+      const response = await POST(request)
+      
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Content-Type')).toBe('text/event-stream')
+      expect(response.headers.get('Cache-Control')).toBe('no-cache')
+      expect(response.headers.get('Connection')).toBe('keep-alive')
+    })
+
+    it('debería enviar evento [context] al inicio del stream', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Test question' })
+      })
+      
+      const response = await POST(request)
+      
+      // Para testear stream SSE necesitamos leer el body
+      const reader = response.body?.getReader()
+      expect(reader).toBeDefined()
+      
+      // La implementación debería asegurar que envía [context] primero
+      expect(mockQuery).toHaveBeenCalled() // Busca chunks relevantes
+    })
+
+    it('debería incluir citas en el contexto', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Test question' })
+      })
+      
+      await POST(request)
+      
+      expect(mockEmbed).toHaveBeenCalledWith('Test question', { taskType: 'retrieval_query' })
+      
+      // El query debería buscar chunks similares, límite 5
+      const sql = mockQuery.mock.calls[0][0] as string
+      expect(sql).toContain('SELECT')
+      expect(sql).toContain('chunks')
+      expect(sql).toContain('ORDER BY')
+      expect(sql).toContain('LIMIT 5')
+    })
+
+    it('debería llamar a streamChat con contexto de chunks relevantes', async () => {
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Pregunta de test' })
+      })
+      
+      await POST(request)
+      
+      expect(mockStreamChat).toHaveBeenCalled()
+      
+      // Verificar que los mensajes incluyen sistema y contexto
+      const messages = mockStreamChat.mock.calls[0][0]
+      expect(Array.isArray(messages)).toBe(true)
+      expect(messages.length).toBe(2)
+      
+      // Debería haber mensaje de sistema
+      expect(messages[0].role).toBe('system')
+      expect(messages[0].content).toContain('KnowledgeDock')
+      expect(messages[0].content).toContain('cita')
+      
+      // Debería haber mensaje de usuario con contexto
+      expect(messages[1].role).toBe('user')
+      expect(messages[1].content).toContain('Pregunta de test')
+      expect(messages[1].content).toContain('Documentos relevantes')
+    })
+
+    it('debería manejar caso sin chunks relevantes', async () => {
+      mockQuery.mockResolvedValue([]) // No hay chunks similares
+      
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Pregunta sin contexto' })
+      })
+      
+      const response = await POST(request)
+      
+      // Aún debería responder con stream
+      expect(response.status).toBe(200)
+      expect(mockStreamChat).toHaveBeenCalled()
+      
+      // El contexto debería indicar que no hay documentos relevantes
+      const messages = mockStreamChat.mock.calls[0][0]
+      expect(messages[1].content).toContain('No se encontraron documentos relevantes')
+    })
+  })
+
+  describe('Manejo de errores', () => {
+    it('debería manejar error de búsqueda en base de datos', async () => {
+      mockQuery.mockRejectedValue(new Error('Database search error'))
+      
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Test error' })
+      })
+      
+      const response = await POST(request)
+      
+      expect(response.status).toBe(500)
+      const data = await response.json()
+      expect(data.error.code).toBe('INTERNAL_ERROR')
+    })
+
+    it('debería manejar error de IA provider', async () => {
+      mockStreamChat.mockRejectedValue(new Error('AI service error'))
+      
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Test IA error' })
+      })
+      
+      const response = await POST(request)
+      
+      expect(response.status).toBe(500)
+      const data = await response.json()
+      expect(data.error.code).toBe('INTERNAL_ERROR')
+    })
+
+    it('debería manejar error en el stream', async () => {
+      async function* errorStream() {
+        yield 'primer chunk'
+        throw new Error('Stream error')
+      }
+      
+      mockStreamChat.mockResolvedValue({
+        textStream: errorStream()
+      })
+      
+      const request = new Request('http://localhost:3000/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Test stream error' })
+      })
+      
+      const response = await POST(request)
+      
+      // Aún debería retornar 200 porque el stream se crea
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Content-Type')).toBe('text/event-stream')
+    })
+  })
+
+  describe('Formato de respuesta de error', () => {
+    it('debería usar formato {error: {code, message}} para errores 400', async () => {
+      const testCases = [
+        { body: {}, expectedCode: 'INVALID_REQUEST' },
+        { body: { question: '' }, expectedCode: 'INVALID_REQUEST' },
+        { body: { otroCampo: 'valor' }, expectedCode: 'INVALID_REQUEST' }
+      ]
+      
+      for (const testCase of testCases) {
+        vi.clearAllMocks()
+        
+        const request = new Request('http://localhost:3000/api/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(testCase.body)
+        })
+        
+        const response = await POST(request)
+        expect(response.status).toBe(400)
+        
+        const data = await response.json()
+        expect(data).toHaveProperty('error')
+        expect(data.error).toHaveProperty('code')
+        expect(data.error).toHaveProperty('message')
+        expect(data.error.code).toBe(testCase.expectedCode)
+        expect(typeof data.error.message).toBe('string')
+      }
+    })
+  })
+})
