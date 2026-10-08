@@ -26,9 +26,34 @@ const GOOGLE_TASK_TYPE = {
   retrieval_document: "RETRIEVAL_DOCUMENT",
 } as const;
 
+/**
+ * Modelos de respaldo, en orden, para cuando el primario falla.
+ *
+ * Dos motivos reales, ambos medidos en producción:
+ *
+ * 1. La cuota gratuita es POR MODELO (20 req/día) y cada modelo tiene su
+ *    propio cubo: si el primario se agota, el siguiente sigue funcionando.
+ * 2. Gemini devuelve 503 "This model is currently experiencing high demand"
+ *    en picos, aunque los reintentos del SDK agoten. Probar el modelo
+ *    siguiente convierte un fallo transitorio en una respuesta.
+ *
+ * `gemini-flash-latest` NO va aquí: es alias de `gemini-3.8-flash` y comparte
+ * su cubo agotado. Los `gemini-2.5-*` tampoco: dan 404 para cuentas nuevas.
+ */
+const FALLBACK_CHAT_MODELS = [
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+];
+
 export class GeminiProvider implements AiProvider {
   private apiKey: string;
-  private chatModel: string;
+  /**
+   * Modelos de chat en orden de prioridad: el primero es el configurado y
+   * el resto entran solo si el anterior falla antes de emitir texto.
+   */
+  private chatModels: string[];
   private embeddingModel: string;
   /**
    * Instancia configurada del SDK.
@@ -42,10 +67,11 @@ export class GeminiProvider implements AiProvider {
 
   constructor(env: NodeJS.ProcessEnv) {
     this.apiKey = env.GEMINI_API_KEY ?? "";
-    // La cuota gratuita es POR MODELO (GenerateRequestsPerDayPerProjectPerModel).
-    // gemini-3.8-flash llegó a su tope de 20 req/día y dejó /api/ask devolviendo
-    // un stream vacío. gemini-3.7-flash es el equivalente con su propio cubo.
-    this.chatModel = env.GEMINI_CHAT_MODEL ?? "gemini-3.7-flash";
+    const primary = env.GEMINI_CHAT_MODEL ?? "gemini-3.7-flash";
+    this.chatModels = [
+      primary,
+      ...FALLBACK_CHAT_MODELS.filter((m) => m !== primary),
+    ];
     this.embeddingModel = env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
 
     if (!this.apiKey) {
@@ -72,25 +98,93 @@ export class GeminiProvider implements AiProvider {
   async chat(messages: ChatMessage[], options?: { stream?: boolean }): Promise<ChatResult> {
     const { instructions, messages: rest } = toPrompt(messages);
 
-    const result = await generateText({
-      model: this.sdk.languageModel(this.chatModel),
-      ...(instructions ? { instructions } : {}),
-      messages: rest,
-    });
+    let lastError: unknown = null;
+    for (const model of this.chatModels) {
+      try {
+        const result = await generateText({
+          model: this.sdk.languageModel(model),
+          ...(instructions ? { instructions } : {}),
+          messages: rest,
+        });
+        // Un texto vacío es un fallo encubierto: seguimos con el siguiente.
+        if (result.text) return { text: result.text };
+        lastError = new Error(`${model} no devolvió texto`);
+      } catch (err) {
+        lastError = err;
+      }
+    }
 
-    return { text: result.text };
+    throw lastError ?? new Error("Ningún modelo de chat disponible");
   }
 
   async streamChat(messages: ChatMessage[]): Promise<ChatStream> {
     const { instructions, messages: rest } = toPrompt(messages);
+    const { sdk, chatModels: candidates } = this;
 
-    const result = streamText({
-      model: this.sdk.languageModel(this.chatModel),
-      ...(instructions ? { instructions } : {}),
-      messages: rest,
-    });
+    /**
+     * Devuelve un único stream de texto que va probando modelos hasta que
+     * alguno arranque de verdad.
+     *
+     * El orden importa: solo cambiamos de modelo ANTES de emitir el primer
+     * trozo. Una vez que hay texto en pantalla, cambiar a mitad de frase
+     * produciría una respuesta mezclada de dos modelos.
+     */
+    async function* textStream(): AsyncGenerator<string> {
+      let lastError: unknown = null;
 
-    return { textStream: result.textStream };
+      for (const model of candidates) {
+        let failure: unknown = null;
+        let emitted = false;
+
+        // Todo dentro del try: si `streamText` lanza síncrono (p. ej. modelo
+        // desconocido) también debe probarse el siguiente, no escapar del bucle.
+        try {
+          const result = streamText({
+            model: sdk.languageModel(model),
+            ...(instructions ? { instructions } : {}),
+            messages: rest,
+            onError: (event) => {
+              // El SDK de AI registra el error por consola pero NO rechaza el
+              // iterable: el stream "termina" limpio y vacío. Sin capturarlo
+              // aquí, /api/ask emitiría [done] con la respuesta en blanco y el
+              // usuario jamás vería cuál fue la causa real.
+              failure = event.error;
+            },
+          });
+
+          const iterator = result.textStream[Symbol.asyncIterator]();
+
+          // Saltamos trozos vacíos: solo cuentan si llega texto de verdad.
+          let step = await iterator.next();
+          while (!step.done && step.value === "") step = await iterator.next();
+
+          if (step.done || failure !== null) {
+            lastError = failure ?? new Error(`${model} no devolvió texto`);
+            continue;
+          }
+
+          emitted = true;
+          yield step.value;
+
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) break;
+            yield next.value;
+          }
+
+          if (failure !== null) throw failure;
+          return;
+        } catch (err) {
+          // Ya se mostró parte de la respuesta: no hay vuelta atrás.
+          if (emitted) throw err;
+          lastError = err;
+        }
+      }
+
+      throw lastError ?? new Error("Ningún modelo de chat disponible");
+    }
+
+    return { textStream: textStream() };
   }
 
   async embed(text: string, options?: EmbeddingOptions): Promise<EmbeddingResult> {

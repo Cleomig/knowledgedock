@@ -3,6 +3,33 @@ import { getAiProvider } from "@/lib/ai";
 import { query, execute } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
+/**
+ * Convierte un error del proveedor IA en algo que tenga sentido para el
+ * usuario en la UI.
+ *
+ * Los errores del SDK de AI son multi-líneas y muy verbosos ("Failed after
+ * 3 attempts. Last error: AI_APICallError: ... at file:///C:/..."), así que
+ * meterlos tal cual en un `[error: ...]` produce un muro de texto ilegible.
+ * Para cuota de Gemini, además, la línea útil no es la primera sino la que
+ * empieza por "Quota exceeded for metric:".
+ */
+function humanError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const quota = lines.find((l) => l.startsWith("Quota exceeded for metric:"));
+  if (quota) {
+    const retry = lines.find((l) => l.startsWith("Please retry in"));
+    return retry ? `${quota} ${retry}.` : quota;
+  }
+
+  const first = lines[0] ?? "Error desconocido del proveedor IA";
+  return first.length > 300 ? `${first.slice(0, 297)}…` : first;
+}
+
 /** POST /api/ask — Streaming */
 export async function POST(req: Request) {
   try {
@@ -87,18 +114,20 @@ Alinea cada cita con el texto fuente exacto.`;
             emitted += textPart.length;
             controller.enqueue(encoder.encode(`data: ${textPart}\n\n`));
           }
-          // El SDK de AI registra algunos fallos (p. ej. 429 de cuota de Gemini)
-          // sin rechazar el iterable: el stream "termina" limpio y sin texto.
-          // Sin este guard, [done] se emite igual, el cliente pinta las citas
-          // con la respuesta en blanco y jamás se ve el error real.
+          // El SDK de AI registra algunos fallos sin rechazar el iterable:
+          // el stream "termina" limpio y sin texto. Sin este guard, [done] se
+          // emite igual, el cliente pinta las citas con la respuesta en
+          // blanco y jamás se ve que hubo un error. GeminiProvider ya captura
+          // esos fallos y re-lanza el motivo real; esto queda como red de
+          // seguridad para cualquier otro proveedor.
           if (emitted === 0) {
             throw new Error(
-              "El proveedor IA no devolvió texto. Suele ser cuota agotada o un modelo no disponible."
+              "El proveedor IA no devolvió ningún texto. Suele deberse a cuota agotada o a que el modelo no está disponible."
             );
           }
         } catch (err) {
           failed = true;
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = humanError(err);
           const payload = JSON.stringify({ type: "error", message: msg });
           controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
           controller.enqueue(encoder.encode(`data: [error: ${msg}]\n\n`));
@@ -119,7 +148,9 @@ Alinea cada cita con el texto fuente exacto.`;
       },
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: { code: "INTERNAL_ERROR", message: msg } }, { status: 500 });
+    return NextResponse.json(
+      { error: { code: "INTERNAL_ERROR", message: humanError(err) } },
+      { status: 500 }
+    );
   }
 }
