@@ -29,8 +29,9 @@ Cada cuenta ve solo sus documentos: sin sesión las rutas de datos responden `40
 
 ## Captura de pantalla
 
-<!-- Reemplazar el marcador cuando haya una captura real de la aplicación. -->
-![Marcador para una captura de KnowledgeDock](https://placehold.co/1200x675?text=KnowledgeDock+-+captura+pendiente)
+Aplicación desplegada: documento indexado y una consulta semántica que devuelve tres fragmentos ordenados por similitud (66 %, 61 % y 57 %).
+
+![KnowledgeDock: documento indexado y tres resultados de búsqueda semántica ordenados por similitud](docs/captura-busqueda-semantica.png)
 
 ## Funcionalidades implementadas
 
@@ -244,4 +245,4 @@ El chat del nivel gratuito puede devolver `503 high demand` de forma intermitent
 
 ## Licencia
 
-El repositorio no contiene un archivo `LICENSE`; por tanto, no declara una licencia de uso, modificación o redistribución. Añade la licencia elegida antes de conceder esos permisos.
+Distribuido bajo [licencia MIT](LICENSE): puedes usar, copiar, modificar y redistribuir el proyecto, siempre que se conserve el aviso de copyright. No incluye ninguna marca, dominio ni dato de terceros (Gemini, Neon y Vercel son servicios de sus respectivos titulares).
