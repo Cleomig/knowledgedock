@@ -72,7 +72,6 @@ describe('chunkText', () => {
     result.forEach(chunk => {
       // Verificar que no termina a mitad de palabra (excepto al final del texto)
       if (!chunk.endsWith(text.slice(-chunk.length))) {
-        const lastChar = chunk[chunk.length - 1]
         // Puede terminar con letra si es el final de una palabra
         // Mejor verificar que no está cortando una palabra en el medio
         const words = chunk.split(' ')
@@ -116,11 +115,6 @@ describe('chunkText', () => {
 
 describe('extractPdfText', () => {
   it('debería extraer texto de PDF correctamente', async () => {
-    // Mock simple para pdf-parse
-    const mockPdfParse = {
-      text: 'Texto extraído del PDF'
-    }
-    
     // No podemos testear realmente sin un PDF, pero podemos verificar que la función existe
     expect(typeof extractPdfText).toBe('function')
   })
