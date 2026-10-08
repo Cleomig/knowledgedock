@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "tsc": "tsc --noEmit",
+    "eslint": "eslint .",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -34,6 +36,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

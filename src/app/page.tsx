@@ -20,6 +20,7 @@ interface DocItem {
   createdAt: string;
   status?: 'processing' | 'ready' | 'failed' | string;
   error?: string | null;
+  summary?: string | null;
 }
 
 interface ChatMsg {
