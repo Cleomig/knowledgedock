@@ -1,8 +1,30 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 import { humanError } from "@/lib/ai/errors";
-import { query, execute } from "@/lib/db";
+import { STREAM_IDLE_TIMEOUT_MS, withIdleTimeout } from "@/lib/ai/idle-timeout";
+import { query } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
+
+/**
+ * Segundos máximos de ejecución de esta función en Vercel.
+ *
+ * Debe ser MAYOR que `STREAM_IDLE_TIMEOUT_MS`: si la plataforma cortara el
+ * stream antes, el cliente vería morir la conexión en mitad de la respuesta
+ * en lugar del `[error: ...]` que emitimos nosotros, que es el que pinta un
+ * mensaje comprensible en pantalla.
+ */
+export const maxDuration = 60;
+
+/** POST /api/ask — Streaming */
+
+/** Un chunk recuperado por similitud, tal y como lo devuelve la SQL de abajo. */
+interface ChunkHit {
+  content: string;
+  ord: number;
+  title: string;
+  doc_id: string;
+  similarity: number;
+}
 
 /** POST /api/ask — Streaming */
 export async function POST(req: Request) {
@@ -11,7 +33,7 @@ export async function POST(req: Request) {
     if (!user) return unauthorizedResponse();
 
     const body = await req.json();
-    const { question, documents }: { question: string; documents?: { id: string; content: string }[] } = body;
+    const { question }: { question: string } = body;
 
     if (!question || typeof question !== "string") {
       return NextResponse.json({ error: { code: "INVALID_REQUEST", message: "question es requerido" } }, { status: 400 });
@@ -26,7 +48,7 @@ export async function POST(req: Request) {
     });
 
     // Buscar top-5 chunks más similares
-    const rows = await query<Record<string, unknown>>(
+    const relevantChunks = await query<ChunkHit>(
       `SELECT c.content, c.ord, d.title, d.id as doc_id,
         1 - (c.embedding <=> $1::vector) AS similarity
        FROM chunks c
@@ -36,9 +58,6 @@ export async function POST(req: Request) {
        LIMIT 5`,
       [JSON.stringify(questionEmbedding), user.id]
     );
-
-    const relevantChunks: { content: string; ord: number; title: string; doc_id: string; similarity: number }[] =
-      (rows as any[]) ?? [];
 
     // Construir contexto con citas
     const contextBlocks = relevantChunks
@@ -98,7 +117,18 @@ Alinea cada cita con el texto fuente exacto.`;
         let failed = false;
         let emitted = 0;
         try {
-          for await (const textPart of stream.textStream) {
+          // Iteración manual en vez de `for await`: solo así podemos poner un
+          // tope a cada trozo. Un `for await` espera indefinidamente y basta
+          // con que el proveedor deje de emitir para que el SSE se quede abierto
+          // para siempre.
+          const iterator = stream.textStream[Symbol.asyncIterator]();
+
+          for (;;) {
+            const { done, value: textPart } = await withIdleTimeout(
+              iterator.next(),
+              STREAM_IDLE_TIMEOUT_MS
+            );
+            if (done) break;
             emitted += textPart.length;
             send(textPart);
           }

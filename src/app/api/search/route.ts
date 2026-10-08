@@ -3,6 +3,16 @@ import { getAiProvider } from "@/lib/ai";
 import { query } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
+/** Un chunk encontrado por similitud, tal y como lo devuelve la SQL de abajo. */
+interface SearchHit {
+  content: string;
+  ord: number;
+  document_id: string;
+  title: string;
+  /** float8 de Postgres: llega como número, pero el driver puede devolver texto. */
+  similarity: number | string;
+}
+
 /** POST /api/search — Búsqueda semántica */
 export async function POST(req: Request) {
   try {
@@ -26,7 +36,7 @@ export async function POST(req: Request) {
     });
 
     // HNSW cosine similarity search (1 - cosine_distance)
-    const rows = await query<Record<string, unknown>>(
+    const rows = await query<SearchHit>(
       `SELECT c.content, c.ord, d.id as document_id, d.title,
         1 - (c.embedding <=> $1::vector) AS similarity
        FROM chunks c
@@ -40,12 +50,14 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       query: searchQuery,
-      results: (rows as any[]).map((r) => ({
+      results: rows.map((r) => ({
         content: r.content,
         ord: r.ord,
         documentId: r.document_id,
         title: r.title,
-        similarity: parseFloat((r.similarity as string) ?? "0"),
+        // `pg` puede traer float8 como número o como texto; `String()` deja
+        // ambos casos en el mismo camino (equivalente al `as string` previo).
+        similarity: parseFloat(String(r.similarity ?? "0")),
       })),
     });
   } catch (err) {

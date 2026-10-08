@@ -95,7 +95,7 @@ export class GeminiProvider implements AiProvider {
     };
   }
 
-  async chat(messages: ChatMessage[], options?: { stream?: boolean }): Promise<ChatResult> {
+  async chat(messages: ChatMessage[], _options?: { stream?: boolean }): Promise<ChatResult> {
     const { instructions, messages: rest } = toPrompt(messages);
 
     let lastError: unknown = null;

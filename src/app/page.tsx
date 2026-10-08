@@ -25,9 +25,21 @@ interface ChatMsg {
   citations?: Citation[];
 }
 
+/**
+ * Techo de seguridad del lado del cliente.
+ *
+ * La ruta `/api/ask` promete cerrar el stream en ~45s (tope de inactividad) y
+ * 60s como máximo (`maxDuration`), pero si la red se corta en seco el `fetch`
+ * no rechaza y el `while (await reader.read())` de `handleSend` esperaría para
+ * siempre: el compositor quedaría deshabilitado sin que se vea ningún error.
+ * Este temporizador aborta la petición pasando un motivo legible.
+ */
+const CLIENT_STREAM_TIMEOUT_MS = 90_000;
+
 export default function Home() {
   const router = useRouter();
   const { data: authSession, isPending: authPending } = authClient.useSession();
+  const userId = authSession?.user?.id;
 
   // Documents
   const [documents, setDocuments] = useState<DocItem[]>([]);
@@ -48,6 +60,7 @@ export default function Home() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -55,15 +68,15 @@ export default function Home() {
   }, [messages, streamingText]);
 
   // Load private documents only after the session is resolved.
+  // Sin sesión no se limpia el estado aquí: mientras no haya usuario la lista
+  // ni siquiera se pinta (más abajo hay un early-return con la pantalla de
+  // acceso), así que ese reset era trabajo muerto y además violaba
+  // `react-hooks/set-state-in-effect` (setState síncrono dentro de un efecto).
   useEffect(() => {
     if (authPending) return;
-    if (!authSession?.user) {
-      setDocuments([]);
-      setDocsLoading(false);
-      return;
-    }
-    fetchDocuments();
-  }, [authPending, authSession?.user.id]);
+    if (!userId) return;
+    void fetchDocuments();
+  }, [authPending, userId]);
 
   async function fetchDocuments() {
     setDocsLoading(true);
@@ -78,10 +91,6 @@ export default function Home() {
     } finally {
       setDocsLoading(false);
     }
-  }
-
-  async function handleUpload(_doc: { id: string; title: string }) {
-    await fetchDocuments();
   }
 
   async function handleDelete(docId: string) {
@@ -122,6 +131,16 @@ export default function Home() {
 
     try {
       abortRef.current = new AbortController();
+      watchdogRef.current = setTimeout(() => {
+        // `abort(reason)` hace que el `fetch` rechace con ESTE error, de modo
+        // que el catch de abajo pinta un mensaje útil en vez del genérico
+        // "The user aborted a request.".
+        abortRef.current?.abort(
+          new Error(
+            'La respuesta tardó demasiado y se ha cancelado. Vuelve a intentarlo.'
+          )
+        );
+      }, CLIENT_STREAM_TIMEOUT_MS);
       const res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -130,8 +149,11 @@ export default function Home() {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as any)?.error?.message ?? `HTTP ${res.status}`);
+        // Formato de error estándar de la API: { error: { code, message } }.
+        const err = (await res.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        throw new Error(err?.error?.message ?? `HTTP ${res.status}`);
       }
 
       const reader = res.body?.getReader();
@@ -198,11 +220,11 @@ export default function Home() {
     } finally {
       setChatLoading(false);
       abortRef.current = null;
+      if (watchdogRef.current !== null) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
     }
-  }
-
-  function handleSearchCancel() {
-    abortRef.current?.abort();
   }
 
   if (authPending) {
@@ -263,7 +285,7 @@ export default function Home() {
         <aside className="flex flex-col gap-6 md:w-1/3">
           <section>
             <h2 className="mb-3 text-sm font-semibold text-foreground uppercase tracking-wide">Subir Documento</h2>
-            <UploadDropzone onUploaded={handleUpload} onError={(msg) => setDocsError(msg)} />
+            <UploadDropzone onUploaded={fetchDocuments} onError={(msg) => setDocsError(msg)} />
           </section>
 
           <section className="flex-1">

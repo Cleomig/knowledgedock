@@ -3,20 +3,28 @@ import { getAiProvider } from "@/lib/ai";
 import { query, execute } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
+/** Fila de `documents` tal y como la devuelve el SELECT de abajo. */
+interface DocumentRow {
+  id: string;
+  title: string;
+  mime_type: string;
+  created_at: Date | string;
+}
+
 /** GET /api/documents — Lista únicamente los documentos del usuario autenticado. */
 export async function GET(req: Request) {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) return unauthorizedResponse();
 
-    const rows = await query<Record<string, unknown>>(
+    const rows = await query<DocumentRow>(
       `SELECT id, title, mime_type, created_at
        FROM documents
        WHERE owner_id = $1
        ORDER BY created_at DESC`,
       [user.id]
     );
-    return NextResponse.json({ documents: rows as any[] });
+    return NextResponse.json({ documents: rows });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: { code: "INTERNAL_ERROR", message: msg } }, { status: 500 });
@@ -57,12 +65,12 @@ export async function POST(req: Request) {
     }
 
     // Los originales se procesan en memoria; storage_key queda sin uso y nullable.
-    const docResult = await query<Record<string, unknown>>(
+    const docResult = await query<{ id: string }>(
       `INSERT INTO documents (owner_id, title, mime_type)
        VALUES ($1, $2, $3) RETURNING id`,
       [user.id, title, mimeType]
     );
-    const docId = (docResult[0] as any)?.id;
+    const docId = docResult[0]?.id;
     if (!docId) throw new Error("No se pudo crear el documento");
 
     // Chunking
