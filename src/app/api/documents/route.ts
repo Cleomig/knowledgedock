@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 import { query, execute } from "@/lib/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
+import { sendDocumentEmail } from "@/lib/email";
 // Import estático (no `require`): `require` con alias `@/` no se resuelve en
 // el entorno de tests de Vitest, y estos módulos son baratos (pdf-parse ya se
 // carga de forma perezosa dentro de `extractPdfText`).
@@ -19,6 +20,37 @@ interface DocumentRow {
   status: string;
   error: string | null;
   summary: string | null;
+}
+
+/**
+ * Envía un email de aviso si el usuario tiene notificaciones activadas.
+ * Best-effort: cualquier error se traga para no romper el procesamiento.
+ */
+async function maybeSendEmail(
+  userId: string,
+  title: string,
+  status: "ready" | "failed",
+  summary: string | null,
+  error: string | null
+): Promise<void> {
+  try {
+    const rows = await query<{ email: string; notify_email: boolean }>(
+      `SELECT email, notify_email FROM "user" WHERE id = $1`,
+      [userId]
+    );
+    const row = rows[0];
+    if (!row || !row.notify_email || !row.email) return;
+
+    await sendDocumentEmail({
+      to: row.email,
+      title,
+      status,
+      summary,
+      error,
+    });
+  } catch (err) {
+    console.error("[email] Error sending notification:", err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** GET /api/documents — Lista únicamente los documentos del usuario autenticado. */
@@ -128,6 +160,7 @@ export async function POST(req: Request) {
             `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
             [docId, 'El documento no contiene texto extraíble']
           );
+          await maybeSendEmail(user.id, title, "failed", null, "El documento no contiene texto extraíble");
           return;
         }
 
@@ -139,6 +172,7 @@ export async function POST(req: Request) {
             `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
             [docId, 'El documento no produjo chunks']
           );
+          await maybeSendEmail(user.id, title, "failed", null, "El documento no produjo chunks");
           return;
         }
 
@@ -163,10 +197,12 @@ export async function POST(req: Request) {
         const summary = await summarizeDocument(title, text).catch(() => "");
 
         // Actualizar estado a 'ready'
+        const finalSummary = summary.trim() ? summary.trim() : null;
         await execute(
           `UPDATE documents SET status = 'ready', error = NULL, summary = $2 WHERE id = $1`,
-          [docId, summary.trim() ? summary : null]
+          [docId, finalSummary]
         );
+        await maybeSendEmail(user.id, title, "ready", finalSummary, null);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errorMessage = msg.length > 500 ? msg.substring(0, 500) : msg;
@@ -174,6 +210,7 @@ export async function POST(req: Request) {
           `UPDATE documents SET status = 'failed', error = $2 WHERE id = $1`,
           [docId, errorMessage]
         );
+        await maybeSendEmail(user.id, title, "failed", null, errorMessage);
       }
     });
 

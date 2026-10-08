@@ -32,7 +32,8 @@
     "pg": "^8.23.1",
     "pgvector": "^0.3.0",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "resend": "^6.32.1"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",

@@ -236,8 +236,9 @@ describe('la abstracción del proveedor no se salta en las rutas', () => {
     const apiDir = resolve(ROOT, 'src', 'app', 'api')
     const files = routeFiles(apiDir)
 
-    // Incluye las cuatro rutas de datos y el handler de autenticación.
-    expect(files).toHaveLength(5)
+    // Incluye las cinco rutas de datos (documents, ask, search, settings)
+    // y el handler de autenticación.
+    expect(files).toHaveLength(6)
 
     const offenders: string[] = []
     for (const file of files) {
@@ -256,9 +257,10 @@ describe('la abstracción del proveedor no se salta en las rutas', () => {
     const apiDir = resolve(ROOT, 'src', 'app', 'api')
     const files = routeFiles(apiDir)
 
-    // [id] solo borra filas y [...all] delega en Better Auth: no necesitan IA.
+    // [id] solo borra filas, [...all] delega en Better Auth y settings solo
+    // gestiona la preferencia de email: ninguno necesita IA.
     const needsAi = files.filter(
-      (f) => !f.includes('[id]') && !f.includes('[...all]'),
+      (f) => !f.includes('[id]') && !f.includes('[...all]') && !f.includes('settings'),
     )
     expect(needsAi).toHaveLength(3)
 

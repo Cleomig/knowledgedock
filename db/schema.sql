@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS "user" (
   email text NOT NULL UNIQUE,
   "emailVerified" boolean NOT NULL DEFAULT false,
   image text,
+  notify_email boolean NOT NULL DEFAULT false,
   "createdAt" timestamp NOT NULL DEFAULT now(),
   "updatedAt" timestamp NOT NULL DEFAULT now()
 );

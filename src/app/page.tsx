@@ -11,6 +11,7 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import Toast, { type ToastMessage, type ToastState } from '@/components/Toast';
+import { EmailSettings } from '@/components/EmailSettings';
 import { authClient } from '@/lib/auth-client';
 import { parseStreamEvent, SSEDecoder, type Citation } from '@/lib/chat/sse';
 
@@ -364,6 +365,11 @@ export default function Home() {
           <section>
             <h2 className="mb-3 text-sm font-semibold text-foreground uppercase tracking-wide">Subir Documento</h2>
             <UploadDropzone onUploaded={refreshDocuments} onError={(msg) => setDocsError(msg)} />
+          </section>
+
+          <section>
+            <h2 className="mb-3 text-sm font-semibold text-foreground uppercase tracking-wide">Avisos</h2>
+            <EmailSettings />
           </section>
 
           <section className="flex-1">
