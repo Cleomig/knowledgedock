@@ -33,6 +33,22 @@ export function humanError(err: unknown): string {
   return clip(lines[0] ?? "Error desconocido del proveedor IA");
 }
 
+/**
+ * Extrae el mensaje de un evento SSE de error con formato `[error: <msg>]`.
+ * Devuelve `null` si el evento no es de error.
+ *
+ * Solo se retira el `]` que cierra el envoltorio. Un `replace(']', '')` se
+ * comería el primer corchete del propio mensaje (p. ej.
+ * "AI_APICallError: [503 Service Unavailable]") y dejaría el texto a medias.
+ */
+export function parseErrorEvent(payload: string): string | null {
+  if (!payload.startsWith('[error:')) return null;
+  const raw = payload.slice('[error:'.length);
+  const msg = raw.endsWith(']') ? raw.slice(0, -1) : raw;
+  // El envoltorio es `[error: <msg>]`, con un espacio de separación.
+  return msg.trim();
+}
+
 /** Corta a 300 caracteres (incluido el `…`) para no saturar la UI. */
 function clip(text: string): string {
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;

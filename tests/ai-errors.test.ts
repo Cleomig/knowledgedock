@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { humanError } from "@/lib/ai/errors";
+import { humanError, parseErrorEvent } from "@/lib/ai/errors";
 
 /**
  * Mensaje literal que devolvió Gemini en producción el día del 429.
@@ -60,5 +60,39 @@ describe("humanError", () => {
     expect(humanError(new Error("\n   \n"))).toBe(
       "Error desconocido del proveedor IA"
     );
+  });
+});
+
+describe("parseErrorEvent", () => {
+  it("desenvuelve el mensaje simple", () => {
+    expect(parseErrorEvent("[error: high demand]")).toBe("high demand");
+  });
+
+  it("conserva los corchetes del propio mensaje", () => {
+    // Regresión: el parser anterior hacía `replace(']', '')`, que se comía el
+    // primer corchete y dejaba "[503 Service Unavailable" sin cerrar.
+    const msg = "AI_APICallError: [503 Service Unavailable] This model is currently experiencing high demand.";
+    expect(parseErrorEvent(`[error: ${msg}]`)).toBe(msg);
+  });
+
+  it("devuelve null en los eventos que no son de error", () => {
+    expect(parseErrorEvent("[start]")).toBeNull();
+    expect(parseErrorEvent("[done]")).toBeNull();
+    expect(parseErrorEvent("[context]")).toBeNull();
+    expect(parseErrorEvent("hola, ¿qué tal?")).toBeNull();
+    expect(
+      parseErrorEvent('{"type":"citation","index":1,"source":"a","content":"b"}')
+    ).toBeNull();
+  });
+
+  it("tolera un evento de error sin el cierre", () => {
+    expect(parseErrorEvent("[error: sin cerrar")).toBe("sin cerrar");
+  });
+
+  it("un evento de error nunca devuelve null (el fallo se ignoraría)", () => {
+    // El cliente hace `if (errMsg !== null) throw ...`: si esto devolviera
+    // null, el error se descartaría en silencio — el bug original.
+    expect(parseErrorEvent("[error: ]")).toBe("");
+    expect(parseErrorEvent("[error: ]")).not.toBeNull();
   });
 });

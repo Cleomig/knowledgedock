@@ -11,6 +11,7 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import { authClient } from '@/lib/auth-client';
+import { parseErrorEvent } from '@/lib/ai/errors';
 
 interface DocItem {
   id: string;
@@ -160,9 +161,8 @@ export default function Home() {
 
           if (payload === '[start]') continue;
           if (payload === '[done]') continue;
-          if (payload.startsWith('[error:')) {
-            throw new Error(payload.replace('[error:', '').replace(']', ''));
-          }
+          const errMsg = parseErrorEvent(payload);
+          if (errMsg !== null) throw new Error(errMsg);
 
           if (payload === '[context]') continue;
 
