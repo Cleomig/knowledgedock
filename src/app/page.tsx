@@ -11,18 +11,12 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import { authClient } from '@/lib/auth-client';
-import { parseErrorEvent } from '@/lib/ai/errors';
+import { parseStreamEvent, type Citation } from '@/lib/chat/sse';
 
 interface DocItem {
   id: string;
   title: string;
   createdAt: string;
-}
-
-interface Citation {
-  id: string;
-  sourceText: string;
-  docTitle: string;
 }
 
 interface ChatMsg {
@@ -146,6 +140,14 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       const citations: Citation[] = [];
+      /**
+       * Acumulador LOCAL. `streamingText` es estado de React y la variable de
+       * este closure nunca se actualiza: leerla al finalizar devolvía siempre
+       * `''`, así que la respuesta se pintaba en blanco aunque el stream
+       * hubiera traído texto (las citas sí salían porque venían de un array
+       * local mutable). De ahí el síntoma de "solo veo las citas".
+       */
+      let text = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -157,36 +159,33 @@ export default function Home() {
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6).trim();
+          const event = parseStreamEvent(line.slice(6).trim());
 
-          if (payload === '[start]') continue;
-          if (payload === '[done]') continue;
-          const errMsg = parseErrorEvent(payload);
-          if (errMsg !== null) throw new Error(errMsg);
-
-          if (payload === '[context]') continue;
-
-          try {
-            const parsed = JSON.parse(payload) as { type: string; index: number; source: string; content: string };
-            if (parsed.type === 'citation') {
-              citations.push({
-                id: String(parsed.index),
-                sourceText: parsed.content,
-                docTitle: parsed.source,
-              });
-              setStreamingCitations([...citations]);
-            }
-          } catch {
-            // Raw text chunk — append to streaming text
-            setStreamingText((prev) => prev + payload);
+          if (event.kind === 'error') throw new Error(event.message);
+          if (event.kind === 'skip') continue;
+          if (event.kind === 'citation') {
+            citations.push(event.citation);
+            setStreamingCitations([...citations]);
+            continue;
           }
+          text += event.text;
+          setStreamingText(text);
         }
+      }
+
+      // Red de seguridad: un [done] sin texto es una respuesta inútil y es
+      // exactamente el fallo original. Mejor un error claro que un mensaje
+      // vacío con citas.
+      if (text.trim() === '') {
+        throw new Error(
+          'La respuesta llegó vacía. Suele deberse a cuota agotada o a un fallo del modelo.'
+        );
       }
 
       // Finalize: commit the streaming message
       const aiMsg: ChatMsg = {
         role: 'ai',
-        content: streamingText,
+        content: text,
         citations,
       };
       setMessages((prev) => [...prev, aiMsg]);
