@@ -38,6 +38,7 @@ export class OpenRouterProvider implements AiProvider {
       model: openrouter(this.chatModel),
       ...(instructions ? { instructions } : {}),
       messages: rest,
+      maxOutputTokens: 2048,
     });
 
     return { text: result.text };
@@ -51,6 +52,7 @@ export class OpenRouterProvider implements AiProvider {
       model: openrouter(this.chatModel),
       ...(instructions ? { instructions } : {}),
       messages: rest,
+      maxOutputTokens: 2048,
     });
 
     return { textStream: result.textStream };
