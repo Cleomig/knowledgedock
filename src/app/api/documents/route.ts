@@ -1,17 +1,20 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 import { query, execute } from "@/lib/db";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
-/** GET /api/documents — Lista documentos del usuario (owner_id = 'anonymous' para MVP) */
-export async function GET() {
+/** GET /api/documents — Lista únicamente los documentos del usuario autenticado. */
+export async function GET(req: Request) {
   try {
-    const owner = process.env.DEFAULT_OWNER_ID ?? "anonymous";
+    const user = await getAuthenticatedUser(req);
+    if (!user) return unauthorizedResponse();
+
     const rows = await query<Record<string, unknown>>(
-      `SELECT id, title, mime_type, storage_key, created_at
+      `SELECT id, title, mime_type, created_at
        FROM documents
        WHERE owner_id = $1
        ORDER BY created_at DESC`,
-      [owner]
+      [user.id]
     );
     return NextResponse.json({ documents: rows as any[] });
   } catch (err) {
@@ -23,10 +26,12 @@ export async function GET() {
 /** POST /api/documents — Sube e indexa un documento */
 export async function POST(req: Request) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return unauthorizedResponse();
+
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const title = (formData.get("title") as string) || file?.name || "Sin título";
-    const owner = process.env.DEFAULT_OWNER_ID ?? "anonymous";
 
     if (!file) {
       return NextResponse.json({ error: { code: "MISSING_FILE", message: "Falta el archivo" } }, { status: 400 });
@@ -51,12 +56,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: { code: "EMPTY_CONTENT", message: "El documento no contiene texto extraíble" } }, { status: 400 });
     }
 
-    // Guardar referencia (en MVP no usamos R2, solo storage_key como placeholder)
-    const storageKey = `docs/${owner}/${crypto.randomUUID()}`;
+    // Los originales se procesan en memoria; storage_key queda sin uso y nullable.
     const docResult = await query<Record<string, unknown>>(
-      `INSERT INTO documents (owner_id, title, mime_type, storage_key)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [owner, title, mimeType, storageKey]
+      `INSERT INTO documents (owner_id, title, mime_type)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [user.id, title, mimeType]
     );
     const docId = (docResult[0] as any)?.id;
     if (!docId) throw new Error("No se pudo crear el documento");

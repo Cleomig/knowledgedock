@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/Cleomig/knowledgedock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Cleomig/knowledgedock/actions/workflows/ci.yml)
 
-**Busca y consulta tus documentos con IA y referencias a sus fuentes.**
+**Busca y consulta tus documentos privados con IA y referencias a sus fuentes.**
 
 KnowledgeDock es un proyecto de portafolio para indexar documentos y recuperar fragmentos por similitud semántica. El backend permite cargar `.txt`, `.md` y `.pdf`, generar embeddings y consultar los fragmentos con PostgreSQL y `pgvector`.
 
-La interfaz carga y actualiza la lista de documentos, permite borrarlos y envía preguntas al endpoint de streaming. El componente `SearchBar` envía consultas al endpoint de búsqueda semántica.
+Regístrate o inicia sesión para cargar, buscar y consultar tus documentos. Las rutas de datos verifican la sesión y aíslan documentos y fragmentos por usuario.
 
 [![Next.js 16.4.0](https://img.shields.io/badge/Next.js-16.4.0-black?logo=next.js)](https://nextjs.org/)
 [![React 19.3.0](https://img.shields.io/badge/React-19.3.0-149ECA?logo=react&logoColor=white)](https://react.dev/)
@@ -22,11 +22,12 @@ La interfaz carga y actualiza la lista de documentos, permite borrarlos y envía
 
 | Área | Funcionalidad | Estado real |
 |---|---|---|
+| Autenticación | Registro e inicio/cierre de sesión con correo y contraseña mediante Better Auth. | `GET` y `POST /api/auth/[...all]`; rutas de datos responden `401` sin sesión. |
 | Carga e indexación | `POST /api/documents` recibe un archivo, extrae texto, lo divide en fragmentos, genera embeddings por lote y los guarda en PostgreSQL. | La interfaz acepta arrastrar y soltar o seleccionar `.txt`, `.md` y `.pdf`, muestra estados de carga/error y recarga la lista tras indexar. |
 | Formatos | Acepta texto (`text/*`) y PDF (`application/pdf`); el componente ofrece `.txt`, `.md` y `.pdf`. | Extracción PDF con `pdf-parse`. |
 | Búsqueda semántica | `POST /api/search` genera el embedding de la consulta y devuelve hasta 10 fragmentos por similitud coseno; umbral predeterminado `0.5`. | `SearchBar` envía la consulta y entrega los resultados al callback de la interfaz. |
 | Preguntas con contexto | `POST /api/ask` busca los 5 fragmentos más cercanos y transmite texto y eventos de citas mediante SSE. | La interfaz envía preguntas, procesa el stream, presenta el texto progresivamente y muestra las fuentes citadas. |
-| Documentos | `GET /api/documents` lista documentos del propietario configurado. `DELETE /api/documents/[id]` borra el documento y sus fragmentos. | La página obtiene la lista al iniciar y después de cargas o borrados; incluye estados de carga, vacío y error. |
+| Documentos | `GET /api/documents` lista documentos del usuario autenticado. `DELETE /api/documents/[id]` borra solo documentos propios y sus fragmentos. | La página obtiene la lista al iniciar y después de cargas o borrados; incluye estados de carga, vacío y error. |
 | Interfaz | Componentes de carga, lista, mensajes, estados vacío/error y esqueletos. | Flujo conectado a las rutas de documentos y preguntas; el componente `SearchBar` incluye la llamada de búsqueda. |
 
 ## Arquitectura
@@ -34,6 +35,8 @@ La interfaz carga y actualiza la lista de documentos, permite borrarlos y envía
 ```mermaid
 flowchart LR
     U[Usuario] --> UI[Interfaz Next.js]
+    UI --> AUTH[Better Auth<br/>registro / sesión]
+    AUTH --> AUTHDB[(Tablas de autenticación<br/>PostgreSQL)]
     UI --> DOC[POST /api/documents]
     UI --> Q[POST /api/search]
     UI --> ASK[POST /api/ask]
@@ -50,9 +53,13 @@ flowchart LR
     G --> ASK
     ASK -->|Respuesta y citas por SSE| UI
     LIST --> DB
+    AUTH -->|user.id| DOC
+    AUTH -->|user.id| Q
+    AUTH -->|user.id| ASK
+    AUTH -->|user.id| LIST
 ```
 
-Los archivos se procesan en memoria durante la carga. La API crea un `storage_key` como marcador, pero no sube el archivo a Cloudflare R2. La autenticación tampoco está conectada; las rutas usan el propietario `anonymous` por defecto.
+Better Auth valida las sesiones en las rutas de documentos, búsqueda y preguntas. El `user.id` de la sesión se guarda en `documents.owner_id` y restringe también la recuperación de chunks. Los archivos originales se procesan en memoria; no se almacenan en Cloudflare R2.
 
 ## Stack
 
@@ -72,7 +79,7 @@ Versiones declaradas en `package.json` (los prefijos `^` indican rangos semver):
 | Vectores | `pgvector` | `^0.3.0` | Adaptador de vectores; el servidor debe tener instalada la extensión `vector`. |
 | PDFs | `pdf-parse` | `^2.4.5` | Extracción de texto de archivos PDF. |
 | Iconos | `lucide-react` | `^1.52.0` | Iconografía de la UI. |
-| Autenticación | `better-auth` | `^1.7.7` | Dependencia presente, pero sin flujo de autenticación implementado. |
+| Autenticación | `better-auth` | `^1.7.7` | Sesiones, registro y login con correo y contraseña; adaptador PostgreSQL. |
 
 ## Quick Start
 
@@ -90,12 +97,13 @@ Requisitos: Node.js compatible con Next.js 16, npm, una base PostgreSQL con la e
    Copy-Item .env.example .env.local
    ```
 
-   Configura como mínimo `DATABASE_URL` y `GEMINI_API_KEY`. Para el flujo predeterminado, conserva `AI_PROVIDER=gemini`.
+   Configura `DATABASE_URL`, `GEMINI_API_KEY` y un `BETTER_AUTH_SECRET` aleatorio. Para el flujo predeterminado, conserva `AI_PROVIDER=gemini`. Define `NEXT_PUBLIC_APP_URL` con la URL base de la aplicación.
 
-3. Ejecuta `db/schema.sql` en la base de datos configurada. Con `psql`, sustituye la URL por el mismo valor de `DATABASE_URL`:
+3. Ejecuta `db/schema.sql` y luego `db/migrations/001_auth_owner_isolation.sql` en la base configurada. La migración elimina documentos antiguos con `owner_id = 'anonymous'` (y sus chunks por cascada) y hace nullable `storage_key`. Con `psql`, sustituye la URL por el mismo valor de `DATABASE_URL`:
 
    ```bash
    psql "<DATABASE_URL>" -f db/schema.sql
+   psql "<DATABASE_URL>" -f db/migrations/001_auth_owner_isolation.sql
    ```
 
    También puedes pegar `db/schema.sql` en el SQL Editor de tu proveedor PostgreSQL.
@@ -130,12 +138,12 @@ PostgreSQL 16 con `pgvector` ya integrado. Los datos persisten en el volumen
 # 1. Levantar el contenedor
 docker compose up -d
 
-# 2. Crear el esquema (tablas + extensión vector + índice HNSW)
+# 2. Crear el esquema, tablas de Better Auth y aplicar la migración de aislamiento
 .\scripts\setup-db.ps1
 
 # 3. Copiar variables de entorno y apuntar DATABASE_URL a PostgreSQL local
 Copy-Item .env.example .env.local
-# .env.local ya tendrá la línea DATABASE_URL para localhost:55432
+# Configura DATABASE_URL, BETTER_AUTH_SECRET, NEXT_PUBLIC_APP_URL y GEMINI_API_KEY
 
 # 4. Arrancar la aplicación
 npm run dev
@@ -180,10 +188,11 @@ La lista completa con valores predeterminados está en [`.env.example`](.env.exa
 | `GROQ_API_KEY`, `GROQ_CHAT_MODEL` | Configuración del adaptador Groq. Groq no genera embeddings, por lo que no cubre el flujo RAG actual. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_CHAT_MODEL`, `OPENROUTER_EMBEDDING_MODEL` | Configuración del adaptador OpenRouter. La abstracción permite usar el proveedor; el flujo RAG del proyecto está configurado actualmente para Gemini. |
 | `DATABASE_URL` | Requerida. Cadena de conexión PostgreSQL usada por `src/lib/db.ts`. |
-| `BETTER_AUTH_SECRET`, `NEXT_PUBLIC_APP_URL` | Presentes en la plantilla para Better Auth, pero el proyecto aún no configura autenticación. |
+| `BETTER_AUTH_SECRET` | Secreto requerido por Better Auth para firmar y cifrar sesiones. No lo compartas ni lo incluyas en el cliente. |
+| `NEXT_PUBLIC_APP_URL` | URL pública/base de Better Auth; localmente `http://localhost:3000`. |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_ENDPOINT` | Presentes en la plantilla; la carga actual no usa R2 ni conserva el archivo original allí. |
 
-La API también lee `DEFAULT_OWNER_ID` si está definido; no aparece en `.env.example` y, si falta, usa `anonymous`. No hay inicio de sesión ni aislamiento de datos por usuario implementados.
+`R2_*` se conserva como configuración futura, pero la aplicación no usa R2: los archivos originales solo se procesan en memoria. `DEFAULT_OWNER_ID` ya no se usa; el propietario siempre proviene de la sesión autenticada. El esquema de Better Auth está versionado en `db/schema.sql`, no se crea automáticamente al iniciar el servidor.
 
 ## Decisiones técnicas
 
@@ -216,7 +225,7 @@ El chat del nivel gratuito puede devolver `503 high demand` de forma intermitent
 ## Alcance actual y limitaciones
 
 - Los metadatos y embeddings se guardan en PostgreSQL. El archivo original no se persiste en R2.
-- No hay autenticación activa: `owner_id` usa `anonymous` por defecto, por lo que no existe aislamiento multiusuario. Better Auth está instalado y sus variables aparecen en `.env.example`, pero todavía no hay un flujo de autenticación implementado.
+- El registro usa correo y contraseña sin verificación de correo; protege `BETTER_AUTH_SECRET` y configura `NEXT_PUBLIC_APP_URL` correctamente al desplegar.
 - `GROQ` no puede usarse en rutas que requieren embeddings. Aunque la abstracción admite varios proveedores, el flujo RAG actual está configurado para Gemini.
 
 ## Licencia

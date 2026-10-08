@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 import { query, execute } from "@/lib/db";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
 /** POST /api/ask — Streaming */
 export async function POST(req: Request) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return unauthorizedResponse();
+
     const body = await req.json();
     const { question, documents }: { question: string; documents?: { id: string; content: string }[] } = body;
 
@@ -26,9 +30,10 @@ export async function POST(req: Request) {
         1 - (c.embedding <=> $1::vector) AS similarity
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
+       WHERE d.owner_id = $2
        ORDER BY c.embedding <=> $1::vector
        LIMIT 5`,
-      [JSON.stringify(questionEmbedding)]
+      [JSON.stringify(questionEmbedding), user.id]
     );
 
     const relevantChunks: { content: string; ord: number; title: string; doc_id: string; similarity: number }[] =

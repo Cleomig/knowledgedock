@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import UploadDropzone from '@/components/UploadDropzone';
 import DocumentList from '@/components/DocumentList';
 import SearchBar from '@/components/SearchBar';
@@ -8,6 +10,7 @@ import ChatMessage from '@/components/ChatMessage';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
+import { authClient } from '@/lib/auth-client';
 
 interface DocItem {
   id: string;
@@ -28,6 +31,9 @@ interface ChatMsg {
 }
 
 export default function Home() {
+  const router = useRouter();
+  const { data: authSession, isPending: authPending } = authClient.useSession();
+
   // Documents
   const [documents, setDocuments] = useState<DocItem[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
@@ -53,10 +59,16 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Load documents on mount
+  // Load private documents only after the session is resolved.
   useEffect(() => {
+    if (authPending) return;
+    if (!authSession?.user) {
+      setDocuments([]);
+      setDocsLoading(false);
+      return;
+    }
     fetchDocuments();
-  }, []);
+  }, [authPending, authSession?.user.id]);
 
   async function fetchDocuments() {
     setDocsLoading(true);
@@ -86,6 +98,16 @@ export default function Home() {
     } catch (err) {
       setDocsError(err instanceof Error ? err.message : 'Error al borrar');
     }
+  }
+
+  async function handleSignOut() {
+    const result = await authClient.signOut();
+    if (result.error) {
+      setChatError(result.error.message ?? 'No se pudo cerrar la sesión.');
+      return;
+    }
+    router.replace('/login');
+    router.refresh();
   }
 
   async function handleAsk(e: React.FormEvent) {
@@ -182,6 +204,34 @@ export default function Home() {
     abortRef.current?.abort();
   }
 
+  if (authPending) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-6">
+        <p role="status" className="text-sm text-muted-foreground">Comprobando sesión...</p>
+      </main>
+    );
+  }
+
+  if (!authSession?.user) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-6">
+        <section className="w-full max-w-lg rounded-xl border border-border bg-background p-8 text-center shadow-sm">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">K</div>
+          <h1 className="mt-5 text-2xl font-bold tracking-tight">KnowledgeDock</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Inicia sesión para cargar, buscar y consultar tus documentos privados.
+          </p>
+          <Link
+            href="/login"
+            className="mt-6 inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Iniciar sesión o registrarse
+          </Link>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       {/* Header */}
@@ -192,6 +242,16 @@ export default function Home() {
               K
             </div>
             <h1 className="text-lg font-bold tracking-tight text-foreground">KnowledgeDock</h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="hidden text-sm text-muted-foreground sm:inline">{authSession.user.email}</span>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Cerrar sesión
+            </button>
           </div>
         </div>
       </header>
@@ -225,6 +285,29 @@ export default function Home() {
         <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-background shadow-sm overflow-hidden">
           {/* Chat messages */}
           <div className="flex-1 overflow-y-auto p-4">
+            <section className="mb-6 rounded-lg border border-border p-3">
+              <h2 className="mb-3 text-sm font-semibold">Búsqueda semántica</h2>
+              <SearchBar
+                onResults={setSearchResults}
+                onLoading={setSearchLoading}
+              />
+              {searchLoading && (
+                <p role="status" className="mt-3 text-sm text-muted-foreground">Buscando en tus documentos...</p>
+              )}
+              {!searchLoading && searchResults.length > 0 && (
+                <ul className="mt-3 flex flex-col gap-2">
+                  {searchResults.map((result, index) => (
+                    <li key={`${result.title}-${index}`} className="rounded-md bg-muted p-3 text-sm">
+                      <p className="mb-1 font-medium">
+                        {result.title} · similitud {(result.similarity * 100).toFixed(0)}%
+                      </p>
+                      <p className="text-muted-foreground">{result.content}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
             {messages.length === 0 && !chatLoading && (
               <EmptyState
                 title="¿Qué necesitas saber?"

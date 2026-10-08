@@ -37,7 +37,8 @@ El script:
   2. Levanta el contenedor con docker-compose
   3. Espera a que la salud del contenedor sea 'healthy'
   4. Ejecuta db/schema.sql dentro del contenedor
-  5. Verifica que las tablas documents, chunks y el índice HNSW existen
+  5. Limpia documentos anónimos anteriores mediante la migración de auth
+  6. Verifica tablas de aplicación, Better Auth y el índice HNSW
 
 Si DATABASE_URL ya apunta a este contenedor en .env.local, la app puede
 conectar inmediatamente después de ejecutar este script.
@@ -78,7 +79,16 @@ if ($Force) {
     $composeArgs += @("--renew-anon-volumes")
 }
 
-docker compose @composeArgs 2>&1 | ForEach-Object { Write-Host $_ }
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$composeOutput = docker compose @composeArgs 2>&1
+$composeExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+$composeOutput | ForEach-Object { Write-Host $_ }
+if ($composeExitCode -ne 0) {
+    Write-Err "docker compose terminó con código $composeExitCode."
+    exit $composeExitCode
+}
 
 # Verificar que el contenedor existe
 $container = docker ps --filter "name=knowledgedock_postgres" --format "{{.Status}}"
@@ -128,20 +138,52 @@ if (-not (Test-Path $scriptPath)) {
 
 # PS 5.1: no soporta el operador de redirección < ; se pasa por tubería.
 $schemaSql = Get-Content -LiteralPath $scriptPath -Raw
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $schemaOutput = $schemaSql | docker exec -i knowledgedock_postgres psql `
     -U knowledgedock `
     -d knowledgedock `
     -v ON_ERROR_STOP=1 `
     -f - 2>&1
+$schemaExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
 
-if ($LASTEXITCODE -ne 0) {
+if ($schemaExitCode -ne 0) {
     Write-Err "Error aplicando schema.sql:"
     Write-Host $schemaOutput -ForegroundColor Red
     exit 1
 }
 Write-Ok "schema.sql aplicado sin errores"
 
-# ─── 5. Verificar tablas e índice ─────────────────────────────────────────────
+# ─── 5. Aplicar migración de aislamiento ──────────────────────────────────────
+Write-Step "Aplicando migración de aislamiento por usuario"
+
+$migrationPath = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "db") "migrations"
+$migrationPath = Join-Path $migrationPath "001_auth_owner_isolation.sql"
+if (-not (Test-Path $migrationPath)) {
+    Write-Err "No se encontró la migración $migrationPath"
+    exit 1
+}
+
+$migrationSql = Get-Content -LiteralPath $migrationPath -Raw
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$migrationOutput = $migrationSql | docker exec -i knowledgedock_postgres psql `
+    -U knowledgedock `
+    -d knowledgedock `
+    -v ON_ERROR_STOP=1 `
+    -f - 2>&1
+$migrationExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+
+if ($migrationExitCode -ne 0) {
+    Write-Err "Error aplicando la migración:"
+    Write-Host $migrationOutput -ForegroundColor Red
+    exit 1
+}
+Write-Ok "Migración aplicada sin errores"
+
+# ─── 6. Verificar tablas e índice ─────────────────────────────────────────────
 Write-Step "Verificando estructura de base de datos"
 
 $verify = docker exec knowledgedock_postgres psql `
@@ -155,7 +197,19 @@ SELECT 'chunks', COUNT(*) FROM information_schema.tables
   WHERE table_schema='public' AND table_name='chunks'
 UNION ALL
 SELECT 'hnsw_idx', COUNT(*) FROM pg_indexes
-  WHERE tablename='chunks' AND indexname='chunks_embedding_idx';
+  WHERE tablename='chunks' AND indexname='chunks_embedding_idx'
+UNION ALL
+SELECT 'auth_user', COUNT(*) FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='user'
+UNION ALL
+SELECT 'auth_session', COUNT(*) FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='session'
+UNION ALL
+SELECT 'auth_account', COUNT(*) FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='account'
+UNION ALL
+SELECT 'auth_verification', COUNT(*) FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='verification';
 "@ 2>&1
 
 $lines = $verify -split "`n" | Where-Object { $_.Trim() -ne "" }
@@ -171,6 +225,10 @@ $ok = $true
 if ($found['documents'] -eq '1') { Write-Ok "Tabla documents ✓" } else { Write-Err "Tabla documents ✗"; $ok = $false }
 if ($found['chunks']   -eq '1') { Write-Ok "Tabla chunks   ✓" } else { Write-Err "Tabla chunks   ✗"; $ok = $false }
 if ($found['hnsw_idx'] -eq '1') { Write-Ok "Índice HNSW    ✓" } else { Write-Err "Índice HNSW    ✗"; $ok = $false }
+if ($found['auth_user'] -eq '1') { Write-Ok "Tabla auth user ✓" } else { Write-Err "Tabla auth user ✗"; $ok = $false }
+if ($found['auth_session'] -eq '1') { Write-Ok "Tabla auth session ✓" } else { Write-Err "Tabla auth session ✗"; $ok = $false }
+if ($found['auth_account'] -eq '1') { Write-Ok "Tabla auth account ✓" } else { Write-Err "Tabla auth account ✗"; $ok = $false }
+if ($found['auth_verification'] -eq '1') { Write-Ok "Tabla auth verification ✓" } else { Write-Err "Tabla auth verification ✗"; $ok = $false }
 
 if (-not $ok) { exit 1 }
 

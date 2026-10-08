@@ -7,7 +7,7 @@ import type { PoolClient } from "pg";
  */
 let _pool: Pool | null = null;
 
-function getPool(): Pool {
+export function getPool(): Pool {
   if (!_pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {

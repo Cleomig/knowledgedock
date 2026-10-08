@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 import { query } from "@/lib/db";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth-session";
 
 /** POST /api/search — Búsqueda semántica */
 export async function POST(req: Request) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return unauthorizedResponse();
+
     const body = await req.json();
     // Umbral por defecto: 0.7 quedaba por encima de lo que realmente produce
     // `gemini-embedding-001` (medido entre 0.63 y 0.66 en consultas reales),
@@ -27,10 +31,11 @@ export async function POST(req: Request) {
         1 - (c.embedding <=> $1::vector) AS similarity
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
-       WHERE 1 - (c.embedding <=> $1::vector) >= $2
+       WHERE d.owner_id = $3
+         AND 1 - (c.embedding <=> $1::vector) >= $2
        ORDER BY similarity DESC
        LIMIT 10`,
-      [JSON.stringify(vector), threshold]
+      [JSON.stringify(vector), threshold, user.id]
     );
 
     return NextResponse.json({
